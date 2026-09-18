@@ -132,11 +132,33 @@ e la stampa, quindi non serve guardare l'immagine per sapere se e' venuta bene.
 Per cambiare l'icona si modificano le costanti in cima a `tool/make_icon.ps1` e si rilanciano
 i due comandi; non si editano i PNG.
 
+## Pipeline GitHub Actions
+
+`.github/workflows/build-release.yml` costruisce l'APK e pubblica la release. Tre inneschi:
+
+| evento | cosa succede |
+| --- | --- |
+| push su `main` | build dell'APK, salvato come artefatto del workflow |
+| push di un tag `v*` | build dell'APK + GitHub Release con l'APK allegato |
+| `workflow_dispatch` | a mano dalla scheda Actions |
+
+- **GitHub esegue il workflow che sta nel commit spinto**: se il file non c'e' sul ramo o sul
+  commit taggato, la pipeline non parte. Un tag su `develop` funziona (il file e' li'), un push
+  su `main` funziona solo quando `main` conterra' davvero il codice.
+- Versione: da `v1.2.3` diventa `1.2.3`, altrimenti si legge il `version:` di `pubspec.yaml`;
+  il numero di build e' sempre `GITHUB_RUN_NUMBER`, passato a `--build-number` (quindi ogni APK
+  ha un `versionCode` diverso anche se pubspec non cambia).
+- L'`flutter analyze` del workflow e' **non bloccante** (`continue-on-error`): i 12 `info`
+  preesistenti farebbero altrimenti fallire la build.
+- Flutter pinnato a `3.47.4` in cima al file (`env.FLUTTER_VERSION`): da aggiornare insieme
+  all'SDK locale.
+
 ## Fonti di verita'
 
 - `lib/main.dart` — l'app.
 - `pubspec.yaml` — dipendenze, font, configurazione icona.
 - `tool/make_icon.ps1` — l'icona.
+- `.github/workflows/build-release.yml` — build e release dell'APK.
 - `android/app/src/main/AndroidManifest.xml` — nome app (`MTG Life Counter`) e icona.
 
 ## Git
