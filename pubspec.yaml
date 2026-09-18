@@ -34,6 +34,10 @@ dependencies:
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
+  # Versione e numero di build del pacchetto installato: la scritta che compare
+  # nel menu. Sono gli stessi valori di pubspec.yaml (e delle release), quindi
+  # non c'e' un secondo posto da aggiornare a mano.
+  package_info_plus: ^10.2.1
   shared_preferences: ^2.5.5
   wakelock_plus: ^1.8.0
 

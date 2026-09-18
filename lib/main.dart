@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -195,6 +196,37 @@ const int kTimerDefaultMinutes = 20;
 const int kTimerMinMinutes = 1;
 const int kTimerMaxMinutes = 180;
 
+/// Canale verso il sistema per l'avviso di fine tempo.
+///
+/// Su Android risponde [MainActivity] con la sveglia di sistema, riprodotta sul
+/// canale delle sveglie: si sente anche con i suoni dei media a zero, che e'
+/// esattamente quello che serve quando il tempo scade mentre si sta giocando.
+const MethodChannel _kAlarmChannel = MethodChannel('mtg_lifecounter/alarm');
+
+/// Fa suonare l'avviso di fine tempo.
+///
+/// Fuori da Android (o se il canale non risponde) resta il suono di sistema,
+/// che e' meglio di niente: il tempo e' comunque finito.
+Future<void> _playTimerAlarm() async {
+  try {
+    await _kAlarmChannel.invokeMethod<void>('playAlarm');
+  } catch (_) {
+    try {
+      await SystemSound.play(SystemSoundType.alert);
+    } catch (_) {}
+  }
+}
+
+/// Zittisce l'avviso di fine tempo: il tempo e' stato rimesso in gioco (o
+/// azzerato) e un allarme che continua a suonare non serve piu' a nessuno.
+Future<void> _stopTimerAlarm() async {
+  try {
+    await _kAlarmChannel.invokeMethod<void>('stopAlarm');
+  } catch (_) {
+    // Fuori da Android non c'e' niente da fermare.
+  }
+}
+
 /// Segno "-" o "+" accanto alle cifre, in una scatola di larghezza fissa.
 class FixedWidthSign extends StatelessWidget {
   final String sign;
@@ -337,18 +369,23 @@ const String _kFlipFirstLifeKey = 'flipFirstLife';
 const String _kOpponentLifeVisibleKey = 'opponentLifeVisible';
 
 /// Impostazioni del timer di partita: se e' acceso, quanto dura e quanto tempo
-/// resta. Il tempo resta fermo quando l'app viene riaperta: a farlo ripartire
+/// resta. Il timer fermo resta fermo anche riaprendo l'app: a farlo ripartire
 /// e' un tocco sul suo box.
 const String _kTimerOnKey = 'timerOn';
 const String _kTimerMinutesKey = 'timerMinutes';
 const String _kTimerSecondsKey = 'timerSeconds';
+
+/// Istante (millisecondi dall'epoca) in cui il timer finira', scritto solo
+/// mentre scorre. E' un momento assoluto, non un tempo che resta: cosi' il conto
+/// si ricalcola dall'orologio e non si perde nemmeno se l'app viene chiusa.
+const String _kTimerDeadlineKey = 'timerDeadline';
 
 /// Trasforma un colore letto dalla memoria in un [Color]; `null` se non
 /// c'era niente da leggere.
 Color? _storedColor(int? value) => value == null ? null : Color(value);
 
 class _LifeCounterHomeState extends State<LifeCounterHome>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   int player1Life = kStartingLife;
   int player2Life = kStartingLife;
 
@@ -377,6 +414,12 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     vsync: this,
     duration: const Duration(milliseconds: 260),
   );
+
+  /// Versione del pacchetto installato, numero di build compreso ("1.0.0+1"):
+  /// e' quella che compare in fondo a sinistra col menu aperto. Resta vuota
+  /// finche' non e' stata letta, e dove non c'e' (sul web in sviluppo il file
+  /// della versione non viene generato) la scritta semplicemente non compare.
+  String _appVersion = '';
 
   static const int _diceSides = 20;
 
@@ -412,7 +455,9 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
 
   /// Momento in cui il timer finira': il tempo rimasto si ricalcola da qui a
   /// ogni tick, invece di sommarsi a mano, cosi' il conteggio non accumula
-  /// ritardo.
+  /// ritardo. Essendo un istante assoluto e' anche quello che si salva in
+  /// memoria, e da li' il tempo riparte giusto anche dopo che l'app e' stata
+  /// chiusa.
   DateTime? _timerDeadline;
 
   Timer? _timerTicker;
@@ -420,17 +465,38 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_restoreGame());
     unawaited(_keepScreenOn());
+    unawaited(_loadAppVersion());
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _rollTimer?.cancel();
     _timerTicker?.cancel();
     _menuController.dispose();
+    // Un allarme lasciato suonare dopo la chiusura della schermata (o dopo un
+    // hot restart) non lo ferma piu' nessuno.
+    unawaited(_stopTimerAlarm());
     unawaited(_releaseScreen());
     super.dispose();
+  }
+
+  /// Il timer conta sull'orologio, non sui tick: quando l'app non e' piu'
+  /// davanti il ticker si ferma (non serve a niente, e il sistema lo rallenta
+  /// comunque) ma la scadenza resta, e al ritorno il tempo si ricalcola da li'.
+  /// Cosi' il conto non si perde ne' mettendo l'app in secondo piano ne'
+  /// chiudendola.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _syncTimerWithClock();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      _timerTicker?.cancel();
+    }
   }
 
   /// Tiene acceso lo schermo finche' l'app e' davanti: fra un turno e l'altro si
@@ -450,6 +516,24 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     } catch (_) {}
   }
 
+  /// Legge la versione dell'app (quella scritta da `flutter build` nel
+  /// pacchetto, quindi anche il numero di build delle release) e la tiene da
+  /// parte per la scritta del menu. Se non si riesce a leggerla la scritta non
+  /// compare: e' un'informazione in piu', non deve dare errore.
+  Future<void> _loadAppVersion() async {
+    final String version;
+    try {
+      final info = await PackageInfo.fromPlatform();
+      final build = info.buildNumber.isEmpty ? '' : '+${info.buildNumber}';
+      version = '${info.version}$build';
+    } catch (_) {
+      return;
+    }
+    // Sul web, dove la versione vera non c'e', resta una stringa vuota.
+    if (version.isEmpty || !mounted) return;
+    setState(() => _appVersion = version);
+  }
+
   /// Rilegge la partita lasciata in sospeso: vite e colori delle due zone.
   /// Se non c'e' niente in memoria si parte da [kStartingLife] e dal colore
   /// predefinito. Se la memoria non e' disponibile non succede nulla: si
@@ -464,23 +548,42 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     if (!mounted) return;
 
     // Le impostazioni del tavolo (timer, vite della nuova partita) si
-    // rileggono comunque: non fanno parte della partita in corso, e il timer
-    // torna sempre fermo (a farlo partire e' un tocco).
+    // rileggono comunque: non fanno parte della partita in corso.
     final timerMinutes =
         (prefs.getInt(_kTimerMinutesKey) ?? kTimerDefaultMinutes).clamp(
           kTimerMinMinutes,
           kTimerMaxMinutes,
         );
     final timerSeconds = prefs.getInt(_kTimerSecondsKey);
+    final timerOn = prefs.getBool(_kTimerOnKey) ?? false;
+
+    // Il timer che stava scorrendo riprende da solo: il tempo che resta si
+    // ricava dalla scadenza salvata, che e' un istante assoluto. Se la scadenza
+    // e' passata mentre l'app era chiusa il tempo e' finito, ma senza suono:
+    // nessuno era li' a sentirlo.
+    final deadlineMillis = prefs.getInt(_kTimerDeadlineKey) ?? 0;
+    final now = DateTime.now();
+    final deadline = deadlineMillis > 0
+        ? DateTime.fromMillisecondsSinceEpoch(deadlineMillis)
+        : null;
+    final running = timerOn && deadline != null && deadline.isAfter(now);
+    final expired = timerOn && deadline != null && !running;
+
     setState(() {
       _timerMinutes = timerMinutes;
-      _timerOn = prefs.getBool(_kTimerOnKey) ?? false;
-      _timerRemaining = Duration(
-        seconds: (timerSeconds ?? timerMinutes * 60).clamp(
-          0,
-          timerMinutes * 60,
-        ),
-      );
+      _timerOn = timerOn;
+      _timerRemaining = running
+          ? deadline.difference(now)
+          : Duration(
+              seconds: expired
+                  ? 0
+                  : (timerSeconds ?? timerMinutes * 60).clamp(
+                      0,
+                      timerMinutes * 60,
+                    ),
+            );
+      _timerRunning = running;
+      _timerDeadline = running ? deadline : null;
       _startingLife = (prefs.getInt(_kStartingLifeKey) ?? kStartingLife).clamp(
         kMinStartingLife,
         kMaxStartingLife,
@@ -488,6 +591,9 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       _flipFirstLife = prefs.getBool(_kFlipFirstLifeKey) ?? false;
       _opponentLifeVisible = prefs.getBool(_kOpponentLifeVisibleKey) ?? true;
     });
+    if (running) {
+      _startTicker();
+    }
 
     if (_touched) return;
 
@@ -520,6 +626,11 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       // Il tempo rimasto si scrive arrotondato al secondo: e' quello che si
       // legge nel box del timer.
       await prefs.setInt(_kTimerSecondsKey, _timerRemaining.inSeconds);
+      // La scadenza serve solo mentre il timer scorre (0 = fermo).
+      await prefs.setInt(
+        _kTimerDeadlineKey,
+        _timerDeadline?.millisecondsSinceEpoch ?? 0,
+      );
     } catch (_) {
       // Senza memoria la partita si gioca comunque, semplicemente non
       // viene ricordata.
@@ -701,6 +812,7 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   /// fermo: a farlo partire e' il tocco sul suo box.
   void setTimerOn(bool enabled) {
     _timerTicker?.cancel();
+    unawaited(_stopTimerAlarm());
     setState(() {
       _timerOn = enabled;
       _timerRunning = false;
@@ -714,6 +826,7 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   void setTimerMinutes(int minutes) {
     final clamped = minutes.clamp(kTimerMinMinutes, kTimerMaxMinutes);
     _timerTicker?.cancel();
+    unawaited(_stopTimerAlarm());
     setState(() {
       _timerMinutes = clamped;
       _timerRunning = false;
@@ -727,6 +840,7 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   /// delle impostazioni del timer e il long press sul box del timer.
   void resetTimer() {
     _timerTicker?.cancel();
+    unawaited(_stopTimerAlarm());
     setState(() {
       _timerRunning = false;
       _timerDeadline = null;
@@ -741,6 +855,9 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   /// finito un tocco lo fa ripartire da capo.
   void toggleTimer() {
     if (!_timerOn) return;
+    // Toccare il timer zittisce l'avviso di fine tempo: il tempo e' stato
+    // rimesso in gioco (o fermato) e l'allarme non serve piu'.
+    unawaited(_stopTimerAlarm());
     if (_timerRunning) {
       _pauseTimer();
       return;
@@ -749,12 +866,44 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       _timerRemaining = Duration(minutes: _timerMinutes);
     }
     _timerDeadline = DateTime.now().add(_timerRemaining);
+    _startTicker();
+    setState(() => _timerRunning = true);
+    unawaited(_saveGame());
+  }
+
+  /// Fa scorrere il tempo rimasto verso lo zero: un tick ogni 200 ms, ma la
+  /// schermata si ridisegna solo quando cambia il secondo scritto nel box.
+  void _startTicker() {
     _timerTicker?.cancel();
     _timerTicker = Timer.periodic(
       const Duration(milliseconds: 200),
       (_) => _tickTimer(),
     );
-    setState(() => _timerRunning = true);
+  }
+
+  /// Rimette il tempo rimasto in pari con l'orologio. Serve al ritorno in primo
+  /// piano, quando il ticker era fermo: o la scadenza e' ancora la' e il timer
+  /// riprende a scorrere, oppure e' passata mentre l'app era via e il tempo e'
+  /// finito senza suono, perche' non c'era nessuno a sentirlo.
+  void _syncTimerWithClock() {
+    final deadline = _timerDeadline;
+    if (deadline == null) return;
+
+    final left = deadline.difference(DateTime.now());
+    if (left > Duration.zero) {
+      setState(() {
+        _timerRemaining = left;
+        _timerRunning = true;
+      });
+      _startTicker();
+      return;
+    }
+
+    setState(() {
+      _timerRemaining = Duration.zero;
+      _timerRunning = false;
+      _timerDeadline = null;
+    });
     unawaited(_saveGame());
   }
 
@@ -792,8 +941,10 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       _timerRunning = false;
       _timerDeadline = null;
     });
-    // Il tempo finito si sente anche senza guardare lo schermo.
+    // Il tempo finito si sente anche senza guardare lo schermo: la vibrazione
+    // piu' forte e la sveglia di sistema, sul canale delle sveglie.
     unawaited(HapticFeedback.heavyImpact());
+    unawaited(_playTimerAlarm());
     unawaited(_saveGame());
   }
 
@@ -1090,6 +1241,19 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
                   onToggle: toggleMenu,
                 ),
               ),
+            // Versione dell'app, in fondo a sinistra: e' l'ultima cosa dello
+            // Stack, quindi sta sopra il velo scuro del menu. Compare e
+            // sparisce con le voci, cosi' mentre si gioca il pannello resta
+            // pulito.
+            if (_appVersion.isNotEmpty)
+              Positioned(
+                left: 0,
+                bottom: 0,
+                child: _AppVersionLabel(
+                  version: _appVersion,
+                  animation: _menuController,
+                ),
+              ),
           ],
         ],
       ),
@@ -1286,6 +1450,52 @@ class RadialMenu extends StatelessWidget {
             foreground: _MenuIconButton.hexagonForeground,
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Versione dell'app, scritta piccola in fondo a sinistra mentre il menu e'
+/// aperto.
+///
+/// Serve a sapere quale build sta girando: gli APK della release si chiamano
+/// come la versione, ma una volta installati non lo dicono piu'. Compare e
+/// sparisce con le voci del menu ([animation] e' la stessa) e non prende i
+/// tocchi, cosi' non cambia niente di quello che c'e' sotto.
+class _AppVersionLabel extends StatelessWidget {
+  final String version;
+  final Animation<double> animation;
+
+  const _AppVersionLabel({required this.version, required this.animation});
+
+  /// Distanza dal bordo dello schermo (o dalle barre di sistema) e misura del
+  /// testo: piccola, ma con peso e spaziatura che la tengono leggibile.
+  static const double _inset = 16;
+  static const double _fontSize = 13;
+
+  @override
+  Widget build(BuildContext context) {
+    final insets = MediaQuery.paddingOf(context);
+    return IgnorePointer(
+      child: AnimatedBuilder(
+        animation: animation,
+        builder: (context, child) =>
+            Opacity(opacity: animation.value, child: child),
+        child: Padding(
+          padding: EdgeInsets.only(
+            left: insets.left + _inset,
+            bottom: insets.bottom + _inset,
+          ),
+          child: Text(
+            'v$version',
+            style: appTextStyle(
+              fontSize: _fontSize,
+              weight: 700,
+              letterSpacing: 1.2,
+              color: Colors.white70,
+            ),
+          ),
+        ),
       ),
     );
   }

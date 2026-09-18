@@ -87,6 +87,15 @@ fra una build e l'altra.
   ogni verso di lettura, quando il flip e' attivo), non una fascia che sposta il contatore.
   Tocco = avvia/pausa, long press = azzera. La voce "Nuova partita" **non** tocca il timer
   (le vite si azzerano solo dal menu, il tempo no).
+  Il timer **conta sull'orologio**, non sui tick: `_timerDeadline` e' un istante assoluto
+  (salvato in `timerDeadline` mentre scorre), quindi il tempo resta giusto anche chiudendo
+  l'app e il conto riprende da solo alla riapertura. Fuori dal primo piano il ticker si
+  ferma e al ritorno `_syncTimerWithClock()` rimette il tempo in pari: se la scadenza e'
+  passata mentre l'app era via il tempo finisce **senza** suono (nessuno era li' a sentirlo).
+  A fine tempo vibra e suona la sveglia di sistema sul canale delle sveglie: il suono lo fa
+  `android/.../MainActivity.kt` (canale `mtg_lifecounter/alarm`, `STREAM_ALARM`), perche' non
+  deve dipendere dal volume dei media; altrove si ripiega su `SystemSound.alert`. Suona una
+  volta sola, e toccare il timer (o azzerarlo) la zittisce.
 - La voce "Nuova partita" (icona refresh) non azzera subito: apre `_NewGameDialog`, dove si
   sceglie la quantita' (preset 20/30/40, oppure -/+ fra `kMinStartingLife` e
   `kMaxStartingLife`) e si conferma. La partita parte solo alla conferma; la quantita' scelta
@@ -96,9 +105,14 @@ fra una build e l'altra.
   chiudono** con un tocco sullo sfondo (`AbsorbPointer`, non un `GestureDetector` vuoto).
 - `_PresetButton` (etichetta + stato scelto) e' il pulsante tondo condiviso dai preset del
   timer e delle vite.
+- `_AppVersionLabel` scrive la versione dell'app piccola in fondo a sinistra mentre il menu e'
+  aperto (stessa animazione delle voci, `Opacity` + `IgnorePointer`). Il numero lo legge
+  `_loadAppVersion()` da `package_info_plus` (`versione+build`, quindi c'e' anche il numero di
+  build delle release); se la lettura fallisce o torna vuota (sul web `version.json` non c'e')
+  la scritta non compare. E' l'unica dipendenza oltre a quelle del contatore.
 - Persistenza in `shared_preferences` con chiavi `player1Life`, `player2Life`, `player1Color`,
   `player2Color`, `flipFirstLife`, `opponentLifeVisible`, `timerOn`, `timerMinutes`,
-  `timerSeconds`, `startingLife`.
+  `timerSeconds`, `timerDeadline`, `startingLife`.
   `_restoreGame()` in `initState`, `_saveGame()` dopo ogni modifica, flag `_touched` per non
   sovrascrivere quello che l'utente ha gia' fatto. `SharedPreferences` e' sempre in `try/catch`.
 - Costanti notevoli in cima al file: `kStartingLife`, `kMinStartingLife`, `kMaxStartingLife`,
@@ -181,6 +195,7 @@ i due comandi; non si editano i PNG.
 - `pubspec.yaml` — dipendenze, font, configurazione icona.
 - `tool/make_icon.ps1` — l'icona.
 - `.github/workflows/build-release.yml` — build e release dell'APK.
+- `android/app/src/main/kotlin/.../MainActivity.kt` — il canale del suono di fine tempo.
 - `android/app/src/main/AndroidManifest.xml` — nome app (`MTG Life Counter`) e icona.
 
 ## Git
