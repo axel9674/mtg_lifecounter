@@ -85,7 +85,8 @@ fra una build e l'altra.
   rettangoli arrotondati.
 - `GameTimerBox` / `_FloatingTimer`: il timer e' un box **fluttuante sopra** le zone (uno per
   ogni verso di lettura, quando il flip e' attivo), non una fascia che sposta il contatore.
-  Tocco = avvia/pausa, long press = azzera. Anche "Reset a 20" azzera il timer.
+  Tocco = avvia/pausa, long press = azzera. "Reset a 20" **non** tocca il timer
+  (le vite si azzerano solo dal menu, il tempo no).
 - `RadialMenu` + `TimerSetupDialog` / `ColorPalette`: overlay che **non si chiudono** con un
   tocco sullo sfondo (`AbsorbPointer`, non un `GestureDetector` vuoto).
 - Persistenza in `shared_preferences` con chiavi `player1Life`, `player2Life`, `player1Color`,

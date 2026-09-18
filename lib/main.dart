@@ -517,18 +517,13 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     unawaited(_saveGame());
   }
 
-  /// Nuova partita: le due vite tornano a [kStartingLife] e il timer torna alla
-  /// durata scelta, **fermo**. Il tempo riparte solo toccando il box, perche' il
-  /// timer non parte mai da solo: azzerando le vite si aspetta il play.
+  /// Nuova partita: le due vite tornano a [kStartingLife]. Il timer non viene
+  /// toccato: si azzera solo dal suo box (long press) o dalle impostazioni.
   void resetLife() {
     _touched = true;
-    _timerTicker?.cancel();
     setState(() {
       player1Life = kStartingLife;
       player2Life = kStartingLife;
-      _timerRunning = false;
-      _timerDeadline = null;
-      _timerRemaining = Duration(minutes: _timerMinutes);
     });
     unawaited(_saveGame());
   }
@@ -706,8 +701,7 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   }
 
   /// Riporta il timer alla durata scelta, fermo: e' quello che fanno la voce
-  /// del menu e il long press sul box del timer. Anche la nuova partita
-  /// ([resetLife]) fa la stessa cosa.
+  /// delle impostazioni del timer e il long press sul box del timer.
   void resetTimer() {
     _timerTicker?.cancel();
     setState(() {
@@ -798,9 +792,7 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     return [
       RadialMenuItem(
         icon: Icons.refresh,
-        tooltip: _timerOn
-            ? 'Nuova partita: vite a 20, timer da capo'
-            : 'Reset a 20',
+        tooltip: 'Reset a 20',
         onTap: () => runMenuAction(resetLife),
       ),
       RadialMenuItem(
