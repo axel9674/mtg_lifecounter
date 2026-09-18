@@ -85,16 +85,24 @@ fra una build e l'altra.
   rettangoli arrotondati.
 - `GameTimerBox` / `_FloatingTimer`: il timer e' un box **fluttuante sopra** le zone (uno per
   ogni verso di lettura, quando il flip e' attivo), non una fascia che sposta il contatore.
-  Tocco = avvia/pausa, long press = azzera. "Reset a 20" **non** tocca il timer
+  Tocco = avvia/pausa, long press = azzera. La voce "Nuova partita" **non** tocca il timer
   (le vite si azzerano solo dal menu, il tempo no).
-- `RadialMenu` + `TimerSetupDialog` / `ColorPalette`: overlay che **non si chiudono** con un
-  tocco sullo sfondo (`AbsorbPointer`, non un `GestureDetector` vuoto).
+- La voce "Nuova partita" (icona refresh) non azzera subito: apre `_NewGameDialog`, dove si
+  sceglie la quantita' (preset 20/30/40, oppure -/+ fra `kMinStartingLife` e
+  `kMaxStartingLife`) e si conferma. La partita parte solo alla conferma; la quantita' scelta
+  resta in `_startingLife` ed e' ricordata (chiave `startingLife`), quindi il tooltip della
+  voce dice sempre il numero corrente.
+- `RadialMenu` + `TimerSetupDialog` / `NewGameDialog` / `ColorPalette`: overlay che **non si
+  chiudono** con un tocco sullo sfondo (`AbsorbPointer`, non un `GestureDetector` vuoto).
+- `_PresetButton` (etichetta + stato scelto) e' il pulsante tondo condiviso dai preset del
+  timer e delle vite.
 - Persistenza in `shared_preferences` con chiavi `player1Life`, `player2Life`, `player1Color`,
   `player2Color`, `flipFirstLife`, `opponentLifeVisible`, `timerOn`, `timerMinutes`,
-  `timerSeconds`.
+  `timerSeconds`, `startingLife`.
   `_restoreGame()` in `initState`, `_saveGame()` dopo ogni modifica, flag `_touched` per non
   sovrascrivere quello che l'utente ha gia' fatto. `SharedPreferences` e' sempre in `try/catch`.
-- Costanti notevoli in cima al file: `kStartingLife`, `kDefaultPanelColor`, `kPlayerColors`,
+- Costanti notevoli in cima al file: `kStartingLife`, `kMinStartingLife`, `kMaxStartingLife`,
+  `kDefaultPanelColor`, `kPlayerColors`,
   `kNumberFontSize`, `kNumberBoxWidth`, `kSignBoxWidth`, `kCounterGap`, `kLifeCounterScale`,
   `kCounterSideInset`, `kComboWindow`, `kComboScale`, `kNumberFontFamily`.
 

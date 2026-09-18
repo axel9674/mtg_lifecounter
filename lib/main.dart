@@ -306,8 +306,14 @@ class PlayerColorOption {
 /// decisivo, quindi nessuna delle due zone viene segnata.
 enum GameOutcome { none, player1, player2 }
 
-/// Vite con cui si comincia la partita (anche dopo "Reset a 20").
+/// Vite con cui si comincia la partita la prima volta. La quantita' si sceglie
+/// dalla voce "Nuova partita" del menu e resta ricordata fra una partita e
+/// l'altra (vedi [_LifeCounterHomeState._startingLife]).
 const int kStartingLife = 20;
+
+/// Limiti della quantita' di vite scegliibile per una nuova partita.
+const int kMinStartingLife = 1;
+const int kMaxStartingLife = 999;
 
 /// Chiavi con cui la partita in corso (vite e colori delle due zone) viene
 /// ricordata fra un avvio e l'altro, ricaricamento della pagina compreso.
@@ -315,6 +321,10 @@ const String _kPlayer1LifeKey = 'player1Life';
 const String _kPlayer2LifeKey = 'player2Life';
 const String _kPlayer1ColorKey = 'player1Color';
 const String _kPlayer2ColorKey = 'player2Color';
+
+/// Vite con cui e' cominciata l'ultima nuova partita: la voce "Nuova partita"
+/// del menu si riapre su questa quantita'.
+const String _kStartingLifeKey = 'startingLife';
 
 /// Se in verticale la vita del primo giocatore e' girata dall'altra parte,
 /// cosi' i due numeri guardano in versi opposti (vedi [_twoZones]).
@@ -341,6 +351,10 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     with SingleTickerProviderStateMixin {
   int player1Life = kStartingLife;
   int player2Life = kStartingLife;
+
+  /// Vite con cui si comincia una nuova partita: e' la quantita' scelta la
+  /// volta scorsa dal menu (all'inizio [kStartingLife]).
+  int _startingLife = kStartingLife;
 
   /// Colore di sfondo scelto da ciascun giocatore per la propria zona.
   Color _player1Color = kDefaultPanelColor;
@@ -449,8 +463,9 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     }
     if (!mounted) return;
 
-    // Le impostazioni del timer si rileggono comunque: non fanno parte della
-    // partita, e il timer torna sempre fermo (a farlo partire e' un tocco).
+    // Le impostazioni del tavolo (timer, vite della nuova partita) si
+    // rileggono comunque: non fanno parte della partita in corso, e il timer
+    // torna sempre fermo (a farlo partire e' un tocco).
     final timerMinutes =
         (prefs.getInt(_kTimerMinutesKey) ?? kTimerDefaultMinutes).clamp(
           kTimerMinMinutes,
@@ -466,6 +481,10 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
           timerMinutes * 60,
         ),
       );
+      _startingLife = (prefs.getInt(_kStartingLifeKey) ?? kStartingLife).clamp(
+        kMinStartingLife,
+        kMaxStartingLife,
+      );
       _flipFirstLife = prefs.getBool(_kFlipFirstLifeKey) ?? false;
       _opponentLifeVisible = prefs.getBool(_kOpponentLifeVisibleKey) ?? true;
     });
@@ -475,8 +494,8 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     final color1 = _storedColor(prefs.getInt(_kPlayer1ColorKey));
     final color2 = _storedColor(prefs.getInt(_kPlayer2ColorKey));
     setState(() {
-      player1Life = prefs.getInt(_kPlayer1LifeKey) ?? kStartingLife;
-      player2Life = prefs.getInt(_kPlayer2LifeKey) ?? kStartingLife;
+      player1Life = prefs.getInt(_kPlayer1LifeKey) ?? _startingLife;
+      player2Life = prefs.getInt(_kPlayer2LifeKey) ?? _startingLife;
       if (color1 != null) _player1Color = color1;
       if (color2 != null) _player2Color = color2;
     });
@@ -497,6 +516,7 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       await prefs.setBool(_kOpponentLifeVisibleKey, _opponentLifeVisible);
       await prefs.setBool(_kTimerOnKey, _timerOn);
       await prefs.setInt(_kTimerMinutesKey, _timerMinutes);
+      await prefs.setInt(_kStartingLifeKey, _startingLife);
       // Il tempo rimasto si scrive arrotondato al secondo: e' quello che si
       // legge nel box del timer.
       await prefs.setInt(_kTimerSecondsKey, _timerRemaining.inSeconds);
@@ -517,13 +537,16 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     unawaited(_saveGame());
   }
 
-  /// Nuova partita: le due vite tornano a [kStartingLife]. Il timer non viene
+  /// Nuova partita: le due vite tornano a [life], la quantita' scelta dal menu
+  /// (che resta ricordata per le partite successive). Il timer non viene
   /// toccato: si azzera solo dal suo box (long press) o dalle impostazioni.
-  void resetLife() {
+  void resetLife(int life) {
     _touched = true;
+    final target = life.clamp(kMinStartingLife, kMaxStartingLife);
     setState(() {
-      player1Life = kStartingLife;
-      player2Life = kStartingLife;
+      _startingLife = target;
+      player1Life = target;
+      player2Life = target;
     });
     unawaited(_saveGame());
   }
@@ -788,12 +811,21 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     );
   }
 
+  /// Apre la scelta delle vite con cui ricominciare: la nuova partita parte
+  /// solo alla conferma, con la quantita' scelta qui.
+  Future<void> showNewGameSetup() async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _NewGameDialog(life: _startingLife, onStart: resetLife),
+    );
+  }
+
   List<RadialMenuItem> _buildMenuItems() {
     return [
       RadialMenuItem(
         icon: Icons.refresh,
-        tooltip: 'Reset a 20',
-        onTap: () => runMenuAction(resetLife),
+        tooltip: 'Nuova partita: $_startingLife vite',
+        onTap: () => runMenuAction(showNewGameSetup),
       ),
       RadialMenuItem(
         icon: Icons.casino,
@@ -2642,8 +2674,8 @@ class _TimerSetupDialogState extends State<_TimerSetupDialog> {
               runSpacing: 8,
               children: [
                 for (final preset in _presets)
-                  _TimerPresetButton(
-                    minutes: preset,
+                  _PresetButton(
+                    label: '$preset',
                     selected: _minutes == preset,
                     onTap: () => _setMinutes(preset),
                   ),
@@ -2671,17 +2703,18 @@ class _TimerSetupDialogState extends State<_TimerSetupDialog> {
   }
 }
 
-/// Durata pronta del timer: il numero di minuti su un pulsante tondo.
+/// Valore pronto su un pulsante tondo: lo usano le durate del timer e le vite
+/// della nuova partita.
 ///
-/// Quella scelta e' bianca piena, come il pulsante principale del menu: si
-/// legge subito quale durata e' impostata.
-class _TimerPresetButton extends StatelessWidget {
-  final int minutes;
+/// Quello scelto e' bianco pieno, come il pulsante principale del menu: si
+/// legge subito quale valore e' impostato.
+class _PresetButton extends StatelessWidget {
+  final String label;
   final bool selected;
   final VoidCallback onTap;
 
-  const _TimerPresetButton({
-    required this.minutes,
+  const _PresetButton({
+    required this.label,
     required this.selected,
     required this.onTap,
   });
@@ -2698,7 +2731,7 @@ class _TimerPresetButton extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
         ),
         child: Text(
-          '$minutes',
+          label,
           style: appTextStyle(
             fontSize: 16,
             weight: 700,
@@ -2706,6 +2739,133 @@ class _TimerPresetButton extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Scelta delle vite con cui cominciare una nuova partita: si apre dalla voce
+/// "Nuova partita" del menu.
+///
+/// La partita comincia solo alla conferma, non scegliendo la quantita': al
+/// contrario del timer un tocco di troppo non deve buttare via la partita in
+/// corso. La quantita' scelta resta ricordata (vedi
+/// [_LifeCounterHomeState._startingLife]), cosi' la volta dopo si riapre su
+/// quella.
+class _NewGameDialog extends StatefulWidget {
+  final int life;
+  final ValueChanged<int> onStart;
+
+  const _NewGameDialog({required this.life, required this.onStart});
+
+  @override
+  State<_NewGameDialog> createState() => _NewGameDialogState();
+}
+
+class _NewGameDialogState extends State<_NewGameDialog> {
+  /// Vite pronte: sono quelle dei formati che si giocano di solito (partita
+  /// normale, due contro due, Commander), cosi' quasi sempre basta un tocco.
+  static const List<int> _presets = [20, 30, 40];
+
+  late int _life = widget.life;
+
+  void _setLife(int value) {
+    final clamped = value.clamp(kMinStartingLife, kMaxStartingLife);
+    if (clamped == _life) return;
+    setState(() => _life = clamped);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1B1B1B),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      title: Text(
+        'Nuova partita',
+        style: appTextStyle(fontSize: 24, weight: 800, letterSpacing: 2),
+      ),
+      // Scorrevole come le impostazioni del timer: col telefono in orizzontale
+      // il contenuto non entra tutto nello schermo.
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Vite di partenza',
+              style: appTextStyle(
+                fontSize: 16,
+                weight: 700,
+                color: Colors.white70,
+                letterSpacing: 1.2,
+              ),
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _MenuIconButton(
+                  icon: Icons.remove,
+                  tooltip: 'Una vita in meno',
+                  size: 52,
+                  onTap: () => _setLife(_life - 1),
+                ),
+                // Il numero ha la sua scatola di larghezza fissa, cosi' il "-" e
+                // il "+" non si spostano passando da 9 a 10 vite.
+                Container(
+                  width: 110,
+                  alignment: Alignment.center,
+                  child: FixedWidthNumber(
+                    '$_life',
+                    width: 96,
+                    style: appNumberStyle(fontSize: 60),
+                  ),
+                ),
+                _MenuIconButton(
+                  icon: Icons.add,
+                  tooltip: 'Una vita in piu',
+                  size: 52,
+                  onTap: () => _setLife(_life + 1),
+                ),
+              ],
+            ),
+            Text(
+              'vite a testa',
+              style: appTextStyle(
+                fontSize: 15,
+                weight: 600,
+                color: Colors.white54,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final preset in _presets)
+                  _PresetButton(
+                    label: '$preset',
+                    selected: _life == preset,
+                    onTap: () => _setLife(preset),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          style: TextButton.styleFrom(foregroundColor: Colors.white),
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Annulla'),
+        ),
+        TextButton(
+          style: TextButton.styleFrom(foregroundColor: Colors.white),
+          onPressed: () {
+            widget.onStart(_life);
+            Navigator.of(context).pop();
+          },
+          child: const Text('Comincia'),
+        ),
+      ],
     );
   }
 }
