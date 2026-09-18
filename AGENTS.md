@@ -96,15 +96,19 @@ fra una build e l'altra.
   `android/.../MainActivity.kt` (canale `mtg_lifecounter/alarm`, `STREAM_ALARM`), perche' non
   deve dipendere dal volume dei media; altrove si ripiega su `SystemSound.alert`. Suona una
   volta sola, e toccare il timer (o azzerarlo) la zittisce.
-- La voce "Nuova partita" (icona refresh) non azzera subito: apre `_NewGameDialog`, dove si
-  sceglie la quantita' (preset 20/30/40, oppure -/+ fra `kMinStartingLife` e
-  `kMaxStartingLife`) e si conferma. La partita parte solo alla conferma; la quantita' scelta
-  resta in `_startingLife` ed e' ricordata (chiave `startingLife`), quindi il tooltip della
-  voce dice sempre il numero corrente.
-- `RadialMenu` + `TimerSetupDialog` / `NewGameDialog` / `ColorPalette`: overlay che **non si
+- La voce "Nuova partita" (icona refresh) non apre nessun popup: mostra `_LifePresetPicker`,
+  cioe' i tre pulsanti 20/30/40 con sopra la scritta "Seleziona i Punti Vita iniziali".
+  Il blocco (picker + `RadialMenu`) e' una `Column` unica dentro un `FittedBox(scaleDown)`:
+  cosi' i pulsanti stanno esattamente sopra la voce del menu e in orizzontale, dove
+  l'altezza e' poca, il gruppo si rimpicciolisce invece di uscire dallo schermo.
+  Toccando un valore la partita riparte subito (`startNewGame` → `resetLife`), la scelta e il
+  menu si chiudono. La quantita' resta in `_startingLife` ed e' ricordata (chiave
+  `startingLife`), quindi il tooltip della voce dice sempre il numero corrente.
+  `_lifePickerOpen` si spegne anche in `closeMenu()`: la scelta vive appesa al menu.
+- `RadialMenu` + `TimerSetupDialog` / `ColorPalette`: overlay che **non si
   chiudono** con un tocco sullo sfondo (`AbsorbPointer`, non un `GestureDetector` vuoto).
 - `_PresetButton` (etichetta + stato scelto) e' il pulsante tondo condiviso dai preset del
-  timer e delle vite.
+  timer e dalla scelta delle vite.
 - `_AppVersionLabel` scrive la versione dell'app piccola in fondo a sinistra mentre il menu e'
   aperto (stessa animazione delle voci, `Opacity` + `IgnorePointer`). Il numero lo legge
   `_loadAppVersion()` da `package_info_plus` (`versione+build`, quindi c'e' anche il numero di

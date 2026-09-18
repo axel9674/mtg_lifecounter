@@ -415,6 +415,11 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     duration: const Duration(milliseconds: 260),
   );
 
+  /// True mentre si sta scegliendo con quante vite ricominciare: i tre valori
+  /// pronti compaiono sopra la voce "Nuova partita" del menu. Si spegne
+  /// scegliendo un valore o richiudendo il menu (vedi [closeMenu]).
+  bool _lifePickerOpen = false;
+
   /// Versione del pacchetto installato, numero di build compreso ("1.0.0+1"):
   /// e' quella che compare in fondo a sinistra col menu aperto. Resta vuota
   /// finche' non e' stata letta, e dove non c'e' (sul web in sviluppo il file
@@ -769,7 +774,10 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   }
 
   void toggleMenu() {
-    setState(() => _menuOpen = !_menuOpen);
+    setState(() {
+      _menuOpen = !_menuOpen;
+      if (!_menuOpen) _lifePickerOpen = false;
+    });
     if (_menuOpen) {
       _menuController.forward();
     } else {
@@ -779,7 +787,12 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
 
   void closeMenu() {
     if (!_menuOpen) return;
-    setState(() => _menuOpen = false);
+    setState(() {
+      _menuOpen = false;
+      // La scelta delle vite vive appesa al menu: chiuso quello non ha piu'
+      // senso lasciarla in giro.
+      _lifePickerOpen = false;
+    });
     _menuController.reverse();
   }
 
@@ -962,13 +975,19 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     );
   }
 
-  /// Apre la scelta delle vite con cui ricominciare: la nuova partita parte
-  /// solo alla conferma, con la quantita' scelta qui.
-  Future<void> showNewGameSetup() async {
-    await showDialog<void>(
-      context: context,
-      builder: (_) => _NewGameDialog(life: _startingLife, onStart: resetLife),
-    );
+  /// Mostra o nasconde la scelta delle vite con cui ricominciare: i tre valori
+  /// pronti compaiono sopra la voce "Nuova partita", dentro al menu aperto
+  /// (per questo la voce non lo chiude, al contrario delle altre).
+  void toggleLifePresetPicker() {
+    setState(() => _lifePickerOpen = !_lifePickerOpen);
+  }
+
+  /// Fa ripartire la partita con le vite scelte: azzera i contatori e richiude
+  /// la scelta e il menu, cosi' le nuove vite si vedono subito.
+  void startNewGame(int life) {
+    resetLife(life);
+    setState(() => _lifePickerOpen = false);
+    closeMenu();
   }
 
   List<RadialMenuItem> _buildMenuItems() {
@@ -976,7 +995,7 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       RadialMenuItem(
         icon: Icons.refresh,
         tooltip: 'Nuova partita: $_startingLife vite',
-        onTap: () => runMenuAction(showNewGameSetup),
+        onTap: toggleLifePresetPicker,
       ),
       RadialMenuItem(
         icon: Icons.casino,
@@ -1234,11 +1253,42 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
             // tutto: non è né visibile né utilizzabile.
             if (!_paletteOpen)
               Center(
-                child: RadialMenu(
-                  animation: _menuController,
-                  open: _menuOpen,
-                  items: _buildMenuItems(),
-                  onToggle: toggleMenu,
+                // Un filo di margine perche' in orizzontale, dove il gruppo
+                // arriva a occupare tutta l'altezza, la scritta non finisca a
+                // filo del bordo.
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  // La scelta delle vite e il menu sono un gruppo unico, quindi
+                  // i tre pulsanti stanno esattamente sopra la voce "Nuova
+                  // partita". In orizzontale, dove l'altezza e' poca, il gruppo
+                  // si rimpicciolisce invece di uscire dallo schermo.
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        AnimatedSize(
+                          duration: const Duration(milliseconds: 180),
+                          curve: Curves.easeOutCubic,
+                          // Cresce verso l'alto, staccandosi dal menu: e' cosi'
+                          // che compare, appesa alla sua voce.
+                          alignment: Alignment.bottomCenter,
+                          child: _lifePickerOpen
+                              ? _LifePresetPicker(
+                                  life: _startingLife,
+                                  onSelected: startNewGame,
+                                )
+                              : const SizedBox.shrink(),
+                        ),
+                        RadialMenu(
+                          animation: _menuController,
+                          open: _menuOpen,
+                          items: _buildMenuItems(),
+                          onToggle: toggleMenu,
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             // Versione dell'app, in fondo a sinistra: e' l'ultima cosa dello
@@ -2953,129 +3003,58 @@ class _PresetButton extends StatelessWidget {
   }
 }
 
-/// Scelta delle vite con cui cominciare una nuova partita: si apre dalla voce
-/// "Nuova partita" del menu.
+/// Scelta delle vite con cui cominciare una nuova partita: i tre valori pronti
+/// che compaiono sopra la voce "Nuova partita" del menu.
 ///
-/// La partita comincia solo alla conferma, non scegliendo la quantita': al
-/// contrario del timer un tocco di troppo non deve buttare via la partita in
-/// corso. La quantita' scelta resta ricordata (vedi
-/// [_LifeCounterHomeState._startingLife]), cosi' la volta dopo si riapre su
+/// Non e' una finestra a parte perche' la scelta e' di un tocco solo: si tocca
+/// la quantita' e la partita riparte. Il valore in uso e' quello bianco pieno,
+/// come nei preset del timer. La quantita' scelta resta ricordata (vedi
+/// [_LifeCounterHomeState._startingLife]), cosi' la volta dopo e' ancora
 /// quella.
-class _NewGameDialog extends StatefulWidget {
-  final int life;
-  final ValueChanged<int> onStart;
-
-  const _NewGameDialog({required this.life, required this.onStart});
-
-  @override
-  State<_NewGameDialog> createState() => _NewGameDialogState();
-}
-
-class _NewGameDialogState extends State<_NewGameDialog> {
+class _LifePresetPicker extends StatelessWidget {
   /// Vite pronte: sono quelle dei formati che si giocano di solito (partita
   /// normale, due contro due, Commander), cosi' quasi sempre basta un tocco.
   static const List<int> _presets = [20, 30, 40];
 
-  late int _life = widget.life;
+  final int life;
+  final ValueChanged<int> onSelected;
 
-  void _setLife(int value) {
-    final clamped = value.clamp(kMinStartingLife, kMaxStartingLife);
-    if (clamped == _life) return;
-    setState(() => _life = clamped);
-  }
+  const _LifePresetPicker({required this.life, required this.onSelected});
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: const Color(0xFF1B1B1B),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
-      title: Text(
-        'Nuova partita',
-        style: appTextStyle(fontSize: 24, weight: 800, letterSpacing: 2),
-      ),
-      // Scorrevole come le impostazioni del timer: col telefono in orizzontale
-      // il contenuto non entra tutto nello schermo.
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'Vite di partenza',
-              style: appTextStyle(
-                fontSize: 16,
-                weight: 700,
-                color: Colors.white70,
-                letterSpacing: 1.2,
-              ),
+    return Padding(
+      // Stacco dalla voce del menu, che sta appena sotto.
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'Seleziona i Punti Vita iniziali',
+            style: appTextStyle(
+              fontSize: 15,
+              weight: 700,
+              color: Colors.white70,
+              letterSpacing: 1.2,
             ),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _MenuIconButton(
-                  icon: Icons.remove,
-                  tooltip: 'Una vita in meno',
-                  size: 52,
-                  onTap: () => _setLife(_life - 1),
-                ),
-                // Il numero ha la sua scatola di larghezza fissa, cosi' il "-" e
-                // il "+" non si spostano passando da 9 a 10 vite.
-                Container(
-                  width: 110,
-                  alignment: Alignment.center,
-                  child: FixedWidthNumber(
-                    '$_life',
-                    width: 96,
-                    style: appNumberStyle(fontSize: 60),
-                  ),
-                ),
-                _MenuIconButton(
-                  icon: Icons.add,
-                  tooltip: 'Una vita in piu',
-                  size: 52,
-                  onTap: () => _setLife(_life + 1),
-                ),
-              ],
-            ),
-            Text(
-              'vite a testa',
-              style: appTextStyle(
-                fontSize: 15,
-                weight: 600,
-                color: Colors.white54,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Wrap(
-              alignment: WrapAlignment.center,
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final preset in _presets)
-                  _PresetButton(
+          ),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final preset in _presets)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 5),
+                  child: _PresetButton(
                     label: '$preset',
-                    selected: _life == preset,
-                    onTap: () => _setLife(preset),
+                    selected: life == preset,
+                    onTap: () => onSelected(preset),
                   ),
-              ],
-            ),
-          ],
-        ),
+                ),
+            ],
+          ),
+        ],
       ),
-      actions: [
-        TextButton(
-          style: TextButton.styleFrom(foregroundColor: Colors.white),
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Annulla'),
-        ),
-        TextButton(
-          style: TextButton.styleFrom(foregroundColor: Colors.white),
-          onPressed: () {
-            widget.onStart(_life);
-            Navigator.of(context).pop();
-          },
-          child: const Text('Comincia'),
-        ),
-      ],
     );
   }
 }
