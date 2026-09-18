@@ -156,6 +156,11 @@ i due comandi; non si editano i PNG.
 - Versione: da `v1.2.3` diventa `1.2.3`, altrimenti si legge il `version:` di `pubspec.yaml`;
   il numero di build e' sempre `GITHUB_RUN_NUMBER`, passato a `--build-number` (quindi ogni APK
   ha un `versionCode` diverso anche se pubspec non cambia).
+- A release pubblicata lo step `Notifica su Telegram` manda un messaggio con il link diretto
+  all'APK (`releases/download/<tag>/<file>`) e quello alle note. Serve il nome del file, che
+  il job `build` espone come output (`outputs.file` da `steps.versione.outputs.file`).
+  Richiede i segreti `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`: se mancano la notifica viene
+  saltata con un `::warning::` e la release resta comunque valida.
 - L'`flutter analyze` del workflow e' **non bloccante** (`continue-on-error`): i 12 `info`
   preesistenti farebbero altrimenti fallire la build.
 - Flutter pinnato a `3.47.4` in cima al file (`env.FLUTTER_VERSION`): da aggiornare insieme

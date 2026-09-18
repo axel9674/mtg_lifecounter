@@ -31,6 +31,10 @@ jobs:
   build:
     name: Build APK release
     runs-on: ubuntu-latest
+    # Il nome del file APK viaggia fino al job della release, che lo usa per il
+    # link diretto da mandare su Telegram.
+    outputs:
+      file: ${{ steps.versione.outputs.file }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -122,3 +126,49 @@ jobs:
 
             Installazione: copiare l'APK sul telefono e aprirlo, oppure
             `adb install -r MTG-Life-Counter-*.apk`.
+
+      # Avviso su Telegram con il link diretto all'APK pubblicato. Servono due
+      # segreti del repository:
+      #   TELEGRAM_BOT_TOKEN  token del bot (BotFather)
+      #   TELEGRAM_CHAT_ID    id della chat che riceve l'avviso
+      # Se mancano la notifica viene saltata e la release resta valida.
+      - name: Notifica su Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          APK_FILE: ${{ needs.build.outputs.file }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "::warning::TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID non configurati: notifica saltata."
+            exit 0
+          fi
+
+          repo="https://github.com/$GITHUB_REPOSITORY"
+          apk_url="$repo/releases/download/$TAG/$APK_FILE"
+          release_url="$repo/releases/tag/$TAG"
+
+          # Il tag finisce nel messaggio in HTML: l'escaping evita che un
+          # carattere strano (es. `&` o `<`) rompa il parse di Telegram.
+          titolo="${TAG//&/&amp;}"
+          titolo="${titolo//</&lt;}"
+          titolo="${titolo//>/&gt;}"
+
+          testo="$(
+            printf '%s\n' \
+              "<b>MTG Life Counter $titolo</b>" \
+              "Nuova release: APK pronto per il sideload." \
+              "" \
+              "<a href=\"$apk_url\">$APK_FILE</a>" \
+              "<a href=\"$release_url\">Note e dettagli</a>"
+          )"
+
+          # Il testo lo codifica curl: niente escaping a mano nella query.
+          curl -sS --fail --retry 3 --retry-connrefused \
+            --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \
+            --data-urlencode "parse_mode=HTML" \
+            --data-urlencode "disable_web_page_preview=true" \
+            --data-urlencode "text=$testo" \
+            "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" > /dev/null
+
+          echo "Notifica inviata per $APK_FILE"
