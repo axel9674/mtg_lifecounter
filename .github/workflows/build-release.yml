@@ -8,6 +8,10 @@
 # Nota: GitHub esegue il workflow che sta nel commit spinto, quindi questo file deve
 # esistere sul ramo/commit interessato (per i tag: sul commit taggato), altrimenti la
 # pipeline non parte.
+#
+# Le action sono fissate ai tag di major mobili (vN): si aggiornano a mano. Da v5/v6
+# in poi girano su Node 24 e vogliono un runner >= 2.327.1: `ubuntu-latest` va bene,
+# su runner self-hosted no. `subosito/flutter-action` e' l'unica ancora a `v2`.
 name: Build APK e release
 
 on:
@@ -29,10 +33,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
@@ -87,7 +91,7 @@ jobs:
              "dist/${{ steps.versione.outputs.file }}"
 
       - name: Salva l'APK come artefatto
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mtg-lifecounter-apk
           path: dist/*.apk
@@ -101,13 +105,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Scarica l'APK
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: mtg-lifecounter-apk
           path: dist
 
       - name: Pubblica la release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: MTG Life Counter ${{ github.ref_name }}
           files: dist/*.apk
