@@ -38,6 +38,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # Servono la storia e i tag: il numero di build e' il conteggio dei commit
+          # (senza `fetch-depth: 0` il clone e' shallow e il conteggio vale 1).
+          fetch-depth: 0
 
       - name: Java 17
         uses: actions/setup-java@v6
@@ -62,7 +66,10 @@ jobs:
         continue-on-error: true
 
       # Da un tag `v1.2.3` ricavo 1.2.3, altrimenti uso il `version:` di pubspec.yaml.
-      # Il numero di build e' il numero della run, cosi' ogni APK ha un versionCode diverso.
+      # Il numero di build e' il numero di commit del ramo, cioe' lo stesso che usa
+      # `tool/build_apk.ps1`: un APK costruito in locale e quello pubblicato per lo
+      # stesso commit hanno cosi' lo stesso nome e lo stesso versionCode, e il
+      # versionCode non torna mai indietro fra una release e la successiva.
       - name: Calcola la versione
         id: versione
         shell: bash
@@ -72,10 +79,11 @@ jobs:
           else
             nome="$(sed -n 's/^version: *\([^+ ]*\).*/\1/p' pubspec.yaml | head -n1)"
           fi
+          numero="$(git rev-list --count HEAD)"
           echo "nome=$nome" >> "$GITHUB_OUTPUT"
-          echo "numero=$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
-          echo "file=MTG-Life-Counter-$nome-build$GITHUB_RUN_NUMBER.apk" >> "$GITHUB_OUTPUT"
-          echo "Versione $nome+$GITHUB_RUN_NUMBER"
+          echo "numero=$numero" >> "$GITHUB_OUTPUT"
+          echo "file=MTG-Life-Counter-$nome-build$numero.apk" >> "$GITHUB_OUTPUT"
+          echo "Versione $nome+$numero"
 
       # La release e' firmata con la debug key (android/app/build.gradle.kts): va bene
       # per il sideload, non per pubblicare sul Play Store.
@@ -85,9 +93,8 @@ jobs:
             --build-name "${{ steps.versione.outputs.nome }}" \
             --build-number "${{ steps.versione.outputs.numero }}"
 
-      # Nome del file: MTG-Life-Counter-<versione>-build<numero>.apk. Il numero di
-      # build c'e' perche' due run sulla stessa versione (pubspec invariato) devono
-      # produrre due file distinti: scaricandoli non si sovrascrivono a vicenda.
+      # Nome del file: MTG-Life-Counter-<versione>-build<numero>.apk. Uguale a quello
+      # che produce `tool/build_apk.ps1` per lo stesso commit.
       - name: Prepara l'artefatto
         run: |
           mkdir -p dist

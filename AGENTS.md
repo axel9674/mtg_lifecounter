@@ -29,13 +29,26 @@ flutter build apk --release     # APK in build\app\outputs\flutter-apk\
 adb install -r build\app\outputs\flutter-apk\app-release.apk   # aggiorna l'APK sul telefono
 ```
 
-Per l'APK: la `release` e' firmata **con la debug key** (`android/app/build.gradle.kts`), quindi
-si installa per sideload ma non si pubblica. Va bene cosi': e' un'app personale.
-
 Per installare usare `adb install -r`, **non** `flutter install`: quest'ultimo disinstalla prima,
 e con l'app se ne va il salvataggio delle vite (i dati stanno nella cartella privata dell'app).
 `-r` lascia la cartella intatta e la sostituzione riesce perche' la firma (debug key) non cambia
-fra una build e l'altra.
+fra una build e l'altra. La release e' firmata con la debug key, quindi va bene per il sideload
+ma non si pubblica sul Play Store: e' un'app personale.
+
+Per l'APK con lo stesso nome della release c'e' `tool/build_apk.ps1`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tool\build_apk.ps1            # solo build
+powershell -NoProfile -ExecutionPolicy Bypass -File tool\build_apk.ps1 -Install   # build + adb install -r
+```
+
+Versione e numero di build li prende da git: nome dall'ultimo tag (`v1.0.1` → `1.0.1`), numero
+dai commit del ramo. Sono gli stessi due numeri della pipeline, quindi per lo stesso commit
+l'APK locale e quello scaricato da GitHub hanno lo stesso nome e lo stesso `versionCode` (e il
+`versionCode` non torna mai indietro: Android rifiuterebbe l'installazione con
+`INSTALL_FAILED_VERSION_DOWNGRADE`). L'APK esce come
+`build\app\outputs\flutter-apk\MTG-Life-Counter-<versione>-build<numero>.apk`, accanto a
+`app-release.apk` che resta.
 
 ## Regole operative
 
@@ -186,11 +199,12 @@ i due comandi; non si editano i PNG.
   commit taggato, la pipeline non parte. Un tag su `develop` funziona (il file e' li'), un push
   su `main` funziona solo quando `main` conterra' davvero il codice.
 - L'APK esce come `MTG-Life-Counter-<versione>-build<numero>.apk` (non `app-release.apk`):
-  ci pensa lo step `Prepara l'artefatto`, che rinomina la copia in `dist/`. Il numero di build
-  serve perche' due run sulla stessa versione restino due file distinti.
-- Versione: da `v1.2.3` diventa `1.2.3`, altrimenti si legge il `version:` di `pubspec.yaml`;
-  il numero di build e' sempre `GITHUB_RUN_NUMBER`, passato a `--build-number` (quindi ogni APK
-  ha un `versionCode` diverso anche se pubspec non cambia).
+  ci pensa lo step `Prepara l'artefatto`, che rinomina la copia in `dist/`. Stesso nome che da'
+  `tool/build_apk.ps1` per lo stesso commit.
+- Versione: dal tag (`v1.2.3` → `1.2.3`) altrimenti dal `version:` di `pubspec.yaml`. Il numero
+  di build e' `git rev-list --count HEAD` (i commit del ramo), passato a `--build-number`: stessa
+  fonte dello script locale, e cresce a ogni commit, quindi il `versionCode` non torna mai
+  indietro. Il checkout ha `fetch-depth: 0` proprio perche' il conteggio serva la storia intera.
 - A release pubblicata lo step `Notifica su Telegram` manda un messaggio con il link diretto
   all'APK (`releases/download/<tag>/<file>`) e quello alle note. Serve il nome del file, che
   il job `build` espone come output (`outputs.file` da `steps.versione.outputs.file`).
@@ -201,11 +215,25 @@ i due comandi; non si editano i PNG.
 - Flutter pinnato a `3.47.4` in cima al file (`env.FLUTTER_VERSION`): da aggiornare insieme
   all'SDK locale.
 
+### Come si pubblica una release
+
+1. portare il `version:` di `pubspec.yaml` alla versione che si sta per taggare e committare:
+   e' quella che mostrera' `flutter run` e la scritta in fondo al menu;
+2. `git push origin develop` (il ramo, se si vuole che resti allineato);
+3. `git tag v1.0.2` sul commit da pubblicare;
+4. `git push origin v1.0.2`.
+
+**E' il tag che fa partire tutto**: build + release + notifica Telegram. Non serve toccare
+`main`. Il tag deve chiamarsi `v<numero>` (da li' viene la versione dell'APK) e deve stare su un
+commit che contiene `.github/workflows/build-release.yml`, perche' GitHub esegue il workflow
+del commit spinto.
+
 ## Fonti di verita'
 
 - `lib/main.dart` — l'app.
-- `pubspec.yaml` — dipendenze, font, configurazione icona.
+- `pubspec.yaml` — dipendenze, font, configurazione icona, versione mostrata da `flutter run`.
 - `tool/make_icon.ps1` — l'icona.
+- `tool/build_apk.ps1` — l'APK locale, con nome e numero della release.
 - `.github/workflows/build-release.yml` — build e release dell'APK.
 - `android/app/src/main/kotlin/.../MainActivity.kt` — il canale del suono di fine tempo.
 - `android/app/src/main/AndroidManifest.xml` — nome app (`MTG Life Counter`) e icona.
