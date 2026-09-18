@@ -1171,6 +1171,10 @@ class RadialMenu extends StatelessWidget {
                       tooltip: items[index].tooltip,
                       size: _itemSize,
                       onTap: items[index].onTap,
+                      // Voci bianche piene: si staccano dallo sfondo scuro del
+                      // menu e dalla zona che sta sotto.
+                      background: _MenuIconButton.itemBackground,
+                      foreground: _MenuIconButton.itemForeground,
                     ),
                   );
                 }),
@@ -1263,9 +1267,10 @@ class _HexagonBorder extends ShapeBorder {
 
 /// Pulsante del menu, con sola icona.
 ///
-/// Per impostazione predefinita e' un cerchio scuro semitrasparente con
-/// l'icona chiara (le voci attorno al pulsante principale). Il pulsante
-/// principale usa invece i colori pieni definiti qui sotto.
+/// Le voci del menu e il pulsante principale usano i colori pieni definiti qui
+/// sotto: cerchio bianco per le voci, esagono bianco per il centro. Gli altri
+/// pulsanti della stessa famiglia (la X che chiude la schermata del dado e il
+/// meno/piu' del timer) restano semitrasparenti.
 ///
 /// Lo sfondo lo disegna un `CustomPaint` che riempie la forma, invece di un
 /// `Material` ritagliato: il ritaglio di un tracciato (l'esagono) obbliga il
@@ -1295,7 +1300,14 @@ class _MenuIconButton extends StatefulWidget {
   static const Color hexagonBackground = Color(0xFFFFFFFF);
   static const Color hexagonForeground = Color(0xFF000000);
 
-  /// Colori di serie delle voci del menu: nero al 65% e bianco al 70%.
+  /// Colori delle voci del menu, quelle attorno al pulsante principale: bianco
+  /// **pieno** e icona nera, come il centro. La trasparenza lasciava vedere la
+  /// zona che sta sotto, e sopra il velo scuro del menu le voci si distinguevano
+  /// meno.
+  static const Color itemBackground = Color(0xFFFFFFFF);
+  static const Color itemForeground = Color(0xFF000000);
+
+  /// Colori di serie degli altri pulsanti: nero al 65% e bianco al 70%.
   static const Color _defaultBackground = Color(0xA6000000);
   static const Color _defaultForeground = Color(0xB3FFFFFF);
 
