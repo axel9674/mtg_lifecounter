@@ -104,14 +104,15 @@ fra una build e l'altra.
   **simmetrico rispetto al centro del menu**, cosi' il menu **non si sposta di un pixel**
   quando i pulsanti compaiono; i due `AnimatedSize` devono durare lo stesso tempo
   (`_kLifePickerDuration`). In **orizzontale** l'altezza e' poca, quindi la scelta si stacca e
-  va a sinistra (`Alignment.centerLeft`, `_kLifePickerInset`) dentro `_LifePickerPanel`
-  (fondo scuro + ombra, come il box del timer) e il menu resta al centro a misura piena.
+  va a sinistra (`Alignment.centerLeft`, `_kLifePickerInset` dal bordo) e il menu resta al
+  centro a misura piena. La scelta e' **identica nelle due direzioni**: i tre pulsanti nudi,
+  senza fondo proprio, appoggiati al velo scuro del menu.
   Tutto questo lo monta `_buildMenuOverlay()`.
   Toccando un valore la partita riparte subito (`startNewGame` → `resetLife`), la scelta e il
   menu si chiudono. La quantita' resta in `_startingLife` ed e' ricordata (chiave
   `startingLife`), quindi il tooltip della voce dice sempre il numero corrente.
   `_lifePickerOpen` si spegne anche in `closeMenu()`: la scelta vive appesa al menu.
-- Il velo scuro che copre la partita col menu aperto e' `Colors.black.withOpacity(0.68)`.
+- Il velo scuro che copre la partita col menu aperto e' `Colors.black.withOpacity(0.82)`.
 - `RadialMenu` + `TimerSetupDialog` / `ColorPalette`: overlay che **non si
   chiudono** con un tocco sullo sfondo (`AbsorbPointer`, non un `GestureDetector` vuoto).
 - `_PresetButton` (etichetta + stato scelto) e' il pulsante tondo condiviso dai preset del

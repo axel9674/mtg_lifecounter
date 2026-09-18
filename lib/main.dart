@@ -1257,7 +1257,7 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
                 // (così non modificano le vite) ma non chiude il menu.
                 // Per chiudere si usa solo la X al centro.
                 child: AbsorbPointer(
-                  child: Container(color: Colors.black.withOpacity(0.68)),
+                  child: Container(color: Colors.black.withOpacity(0.82)),
                 ),
               ),
             ..._buildMenuOverlay(),
@@ -1304,9 +1304,9 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     if (_isWide(context)) {
       return [
         Center(child: menu),
-        // La scelta si stacca dal menu: e' un pannellino flottante come il
-        // timer, col suo fondo scuro e la sua ombra, perche' sta sopra il
-        // tavolo di gioco e non dentro un pannello.
+        // La scelta si stacca dal menu e va a sinistra, dove c'e' spazio
+        // libero. Nessun fondo: e' la stessa scelta nuda che in verticale sta
+        // sopra la voce "Nuova partita", appoggiata al velo scuro.
         Align(
           alignment: Alignment.centerLeft,
           child: Padding(
@@ -1319,12 +1319,10 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
               // Cresce verso destra, allontanandosi dal bordo.
               alignment: Alignment.centerLeft,
               child: _lifePickerOpen
-                  ? _LifePickerPanel(
-                      child: _LifePresetPicker(
-                        life: _startingLife,
-                        onSelected: startNewGame,
-                        bottomGap: 0,
-                      ),
+                  ? _LifePresetPicker(
+                      life: _startingLife,
+                      onSelected: startNewGame,
+                      bottomGap: 0,
                     )
                   : const SizedBox.shrink(),
             ),
@@ -3129,35 +3127,6 @@ class _LifePresetPicker extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-/// Pannellino flottante per la scelta delle vite quando sta da sola (in
-/// orizzontale): fondo scuro, angoli tondi e ombra come il box del timer, cosi'
-/// si legge sopra il tavolo di gioco senza sembrare una finestra di sistema.
-class _LifePickerPanel extends StatelessWidget {
-  final Widget child;
-
-  const _LifePickerPanel({required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-      decoration: BoxDecoration(
-        color: const Color(0xD0000000),
-        borderRadius: BorderRadius.circular(20),
-        // Ombra leggera: stacca il pannellino dalla schermata sottostante.
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x66000000),
-            blurRadius: 14,
-            offset: Offset(0, 4),
-          ),
-        ],
-      ),
-      child: child,
     );
   }
 }
