@@ -1,0 +1,143 @@
+# AGENTS.md
+
+Istruzioni per agenti AI che lavorano su questo repository.
+
+## Il progetto
+
+`mtg_lifecounter` e' un'app Flutter personale: un segnapunti di vita per due giocatori a Magic.
+La UI e' **interamente in italiano**, con commenti in italiano.
+
+- **Tutto il codice sta in `lib/main.dart`** (unico file, ~2300 righe: tema, helper di stile,
+  widget pubblici, widget privati `_Xxx`, `main()`). Non e' un errore: e' una scelta, perche'
+  l'app e' piccola e i widget sono tutti legati fra loro. Non splittare in piu' file senza
+  che sia stato chiesto esplicitamente.
+- `test/widget_test.dart` esiste ma **non va eseguito** (vedi "Regole operative").
+- Cartelle `android/`, `ios/`, `linux/`, `macos/`, `web/`, `windows/` sono generate da
+  `flutter create`: si toccano solo quando serve davvero (es. manifest, gradle, icona).
+- `tool/` contiene script di supporto, `assets/` i font e i PNG dell'icona.
+
+Sviluppo su Windows, Flutter **3.47.4** stable / Dart **3.13.3**, SDK in `C:\DEV\flutter`.
+
+## Comandi
+
+```powershell
+flutter pub get                 # dipendenze
+flutter analyze lib             # validazione statica (baseline: 12 info, 0 errori)
+dart format lib                 # formattazione (usare questo, non editare a mano)
+flutter run -d RFCWC0VE01P      # telefono: Galaxy S24 (SM S921B), Android 16 / API 36
+flutter build apk --release     # APK in build\app\outputs\flutter-apk\
+flutter install -d RFCWC0VE01P  # installa l'APK compilato sul telefono
+```
+
+Per l'APK: la `release` e' firmata **con la debug key** (`android/app/build.gradle.kts`), quindi
+si installa per sideload ma non si pubblica. Va bene cosi': e' un'app personale.
+
+## Regole operative
+
+- **Non eseguire mai `flutter test`**, ne' aggiungere golden test o loop di verifica a misura
+  di pixel. L'app e' personale e la verifica visiva la fa l'utente sul telefono.
+- **Fare commit, mai `git push`**, se non e' stato chiesto esplicitamente.
+- Messaggi di commit **in italiano**: titolo conciso, poi elenco puntato **senza righe vuote**
+  tra i bullet. Passare il messaggio con un solo `-m` e una here-string.
+- Non fare refactoring o "pulizie" non richieste.
+- Rispondere in italiano, tono breve e concreto.
+
+## Ambiente: vincoli da non rompere
+
+- Il pub cache e' su `C:`, il progetto su `D:`. Il compilatore incrementale di Kotlin non
+  riesce a gestire path su root diverse e la build fallisce con
+  `IllegalArgumentException: this and base files have different roots`.
+  **`kotlin.incremental=false` in `android/gradle.properties` deve restare.**
+  Se la build si incastra: `.\android\gradlew.bat --stop` e cancellare `build\<plugin>`.
+- `build/` e `.dart_tool/` sono gitignored: `build/` e' anche il posto giusto per script o
+  file di appoggio temporanei.
+- Aggiungere un **plugin** richiede un riavvio completo di `flutter run` (non basta l'hot
+  restart); per le modifiche a widget basta l'hot reload. Su web usare `navigate_page`
+  per ricaricare la pagina dell'app quando l'albero dei widget sembra vecchio.
+
+## Architettura (mappa rapida di `lib/main.dart`)
+
+- `main()` → `LifeCounterApp` (`MaterialApp` con `ThemeData.dark()`, font Nunito).
+- `_twoZones(context)` e' il layout condiviso da vista vita e vista dado: in portrait una
+  `Column` (zona 1 sopra, zona 2 sotto), in landscape una `Row` (zona 1 a sinistra,
+  zona 2 a destra).
+- **Le cifre seguono lo schermo, non c'e' nessuna rotazione di 90°.** L'unica rotazione e'
+  il mezzo giro (`quarterTurns: 2`) della prima zona quando il flip e' attivo.
+  `portrait → 1` e' una versione gia' bocciata dall'utente: non riproporla.
+- `PlayerZone` = pila di due "card": `ColorPalette` sotto, contatore sopra, animati con
+  `AnimatedSlide`; `_ZoneCardHandle` e' la maniglia che resta visibile a pila aperta.
+  Swipe verticale apre/chiude la tavolozza (`primaryVelocity`, soglia 100 px/s) e chiude
+  solo con lo swipe opposto.
+- -1/+1 si applicano su `onTapUp` (non `onTapDown`), altrimenti uno swipe cambierebbe la
+  vita; `onTapDown` serve solo al velo di feedback `_TapShade`.
+- Long press su un lato: primo punto immediato + `Timer.periodic(140 ms)`.
+- `_MenuIconButton` e' il bottone unico del menu (hexagon centrale, voci radiali, chiusura
+  dado). Dipinge la propria forma con `_MenuButtonShapePainter` invece di usare
+  `Material`/`InkWell`: il feedback premuto e' un velo di colore, scelta preferita dall'utente.
+  Regola generale per questa app: **disegnare le forme, non ritagliarle**, tranne cerchi e
+  rettangoli arrotondati.
+- `GameTimerBox` / `_FloatingTimer`: il timer e' un box **fluttuante sopra** le zone (uno per
+  ogni verso di lettura, quando il flip e' attivo), non una fascia che sposta il contatore.
+  Tocco = avvia/pausa, long press = azzera. Anche "Reset a 20" azzera il timer.
+- `RadialMenu` + `TimerSetupDialog` / `ColorPalette`: overlay che **non si chiudono** con un
+  tocco sullo sfondo (`AbsorbPointer`, non un `GestureDetector` vuoto).
+- Persistenza in `shared_preferences` con chiavi `player1Life`, `player2Life`, `player1Color`,
+  `player2Color`, `flipFirstLife`, `timerOn`, `timerMinutes`, `timerSeconds`.
+  `_restoreGame()` in `initState`, `_saveGame()` dopo ogni modifica, flag `_touched` per non
+  sovrascrivere quello che l'utente ha gia' fatto. `SharedPreferences` e' sempre in `try/catch`.
+- Costanti notevoli in cima al file: `kStartingLife`, `kDefaultPanelColor`, `kPlayerColors`,
+  `kNumberFontSize`, `kNumberBoxWidth`, `kSignBoxWidth`, `kCounterGap`, `kLifeCounterScale`,
+  `kCounterSideInset`, `kComboWindow`, `kComboScale`, `kNumberFontFamily`.
+
+## Stile e tipografia
+
+- Mai `TextStyle` grezzi: usare `appTextStyle({fontSize, weight, color, letterSpacing})` per
+  la UI e `appNumberStyle({...})` per le cifre grandi.
+- Due font: **Nunito** (variable, `assets/fonts/Nunito.ttf`) per tutto il testo, **MedulaOne**
+  (`assets/fonts/MedulaOne-Regular.ttf`, `kNumberFontFamily`) solo per cifre e segni `+`/`-`.
+  I segni sono testo in MedulaOne, non icone Material, cosi' hanno lo stesso peso delle cifre.
+- Ogni testo dentro una `Row` a misura intrinseca deve stare in una `SizedBox` a larghezza
+  fissa (con `FittedBox(fit: BoxFit.scaleDown)` se serve): senza, le metriche del font
+  spostano i vicini quando cambia il numero di cifre.
+- Nei widget **privati** (`_Xxx`) non mettere `super.key`: da' `unused_element_parameter`.
+- Aggiungere un font richiede `flutter pub get` **e** hot restart.
+
+## Icona dell'app
+
+L'icona e' generata da uno script, non disegnata a mano:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tool\make_icon.ps1   # -> assets\launcher\*.png
+dart run flutter_launcher_icons                                          # -> android\...\res\...
+```
+
+`tool/make_icon.ps1` (GDI+, `System.Drawing`) disegna l'esagono bianco arrotondato con le
+cifre "20" in MedulaOne e scrive quattro PNG 1024×1024 in `assets/launcher/`:
+
+| file | uso |
+| --- | --- |
+| `icon.png` | icona classica (`image_path`), sfondo gradiente + esagono |
+| `icon_background.png` | solo sfondo, `adaptive_icon_background` |
+| `icon_foreground.png` | trasparente, esagono + cifre, `adaptive_icon_foreground` |
+| `icon_monochrome.png` | contorno + cifre bianche, `adaptive_icon_monochrome` (Android 13+) |
+
+La configurazione sta in fondo a `pubspec.yaml` (`flutter_launcher_icons:`), con
+`adaptive_icon_foreground_inset: 0` perche' il disegno tiene gia' conto della safe zone
+Android (66/108). Lo script termina con un auto-controllo che misura l'inchiostro delle cifre
+e la stampa, quindi non serve guardare l'immagine per sapere se e' venuta bene.
+
+Per cambiare l'icona si modificano le costanti in cima a `tool/make_icon.ps1` e si rilanciano
+i due comandi; non si editano i PNG.
+
+## Fonti di verita'
+
+- `lib/main.dart` — l'app.
+- `pubspec.yaml` — dipendenze, font, configurazione icona.
+- `tool/make_icon.ps1` — l'icona.
+- `android/app/src/main/AndroidManifest.xml` — nome app (`MTG Life Counter`) e icona.
+
+## Git
+
+- `main` = **un solo commit con albero vuoto** (0 file), per scelta dell'utente.
+- `develop` = ramo di `main` con tutto il lavoro; `main` e' antenato di `develop`.
+- Si lavora su `develop`. Commit in italiano, push **solo se richiesto**.
