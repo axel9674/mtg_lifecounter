@@ -671,9 +671,9 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
 
   /// Mostra o nasconde la vita dell'avversario accanto al contatore.
   ///
-  /// La scritta compare solo con la visualizzazione girata, quindi fuori da li'
-  /// l'opzione e' gia' senza effetto: si puo' scegliere in anticipo e resta
-  /// buona anche dopo aver girato la vita.
+  /// La scritta compare solo con la vita girata: fuori da li' la voce del menu
+  /// resta in elenco ma spenta (vedi [_buildMenuItems]), cosi' il menu ha
+  /// sempre le stesse voci nella stessa posizione.
   void toggleOpponentLife() {
     setState(() => _opponentLifeVisible = !_opponentLifeVisible);
     unawaited(_saveGame());
@@ -817,12 +817,17 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
             : 'Gira la vita del giocatore 1',
         onTap: () => runMenuAction(toggleFlipFirstLife),
       ),
-      // La voce resta sempre in elenco, anche quando la scritta non c'e':
-      // cosi' il menu ha sempre le stesse voci nella stessa posizione e
-      // l'opzione si trova anche prima di girare la vita.
+      // La voce resta sempre in elenco, anche quando non e' utilizzabile:
+      // cosi' il menu ha sempre le stesse voci nella stessa posizione. Senza
+      // la vita girata pero' la scritta dell'avversario non c'e' e la voce
+      // resta spenta (scura e non toccabile), perche' altrimenti si potrebbe
+      // "nascondere" qualcosa che non si vede.
       RadialMenuItem(
         icon: _opponentLifeVisible ? Icons.visibility : Icons.visibility_off,
-        tooltip: _opponentLifeVisible
+        enabled: _flipFirstLife,
+        tooltip: !_flipFirstLife
+            ? 'Vita avversaria: prima gira la vita del giocatore 1'
+            : _opponentLifeVisible
             ? 'Nascondi la vita avversaria'
             : 'Mostra la vita avversaria',
         onTap: () => runMenuAction(toggleOpponentLife),
@@ -1074,10 +1079,15 @@ class RadialMenuItem {
   final String tooltip;
   final VoidCallback onTap;
 
+  /// False = voce spenta: si vede scura e non risponde ai tocchi. Serve alla
+  /// voce della vita avversaria, che ha effetto solo con i valori specchiati.
+  final bool enabled;
+
   const RadialMenuItem({
     required this.icon,
     required this.tooltip,
     required this.onTap,
+    this.enabled = true,
   });
 }
 
@@ -1228,6 +1238,7 @@ class RadialMenu extends StatelessWidget {
                       tooltip: items[index].tooltip,
                       size: _itemSize,
                       onTap: items[index].onTap,
+                      enabled: items[index].enabled,
                       // Voci bianche piene: si staccano dallo sfondo scuro del
                       // menu e dalla zona che sta sotto.
                       background: _MenuIconButton.itemBackground,
@@ -1341,6 +1352,9 @@ class _MenuIconButton extends StatefulWidget {
   final double size;
   final VoidCallback onTap;
 
+  /// False = voce spenta: lo sfondo si scurisce e i tocchi non fanno niente.
+  final bool enabled;
+
   /// Forma dello sfondo: cerchio per le voci del menu, esagono per il
   /// pulsante principale.
   final ShapeBorder shape;
@@ -1371,11 +1385,16 @@ class _MenuIconButton extends StatefulWidget {
   /// Quanto si avvicina il fondo all'icona mentre il pulsante e' premuto.
   static const double _pressedMix = 0.22;
 
+  /// Quanto si scurisce lo sfondo di una voce spenta: da bianco a un grigio
+  /// scuro, che si stacca sia dalle voci accese sia dallo sfondo del menu.
+  static const double _disabledMix = 0.6;
+
   const _MenuIconButton({
     required this.icon,
     required this.tooltip,
     required this.size,
     required this.onTap,
+    this.enabled = true,
     this.shape = const CircleBorder(),
     this.background = _defaultBackground,
     this.foreground = _defaultForeground,
@@ -1400,7 +1419,16 @@ class _MenuIconButtonState extends State<_MenuIconButton> {
 
   @override
   Widget build(BuildContext context) {
-    final background = _pressed
+    final enabled = widget.enabled;
+    final background = !enabled
+        // Voce spenta: sfondo scurito invece che bianco pieno, cosi' si legge
+        // come "c'e' ma non si tocca" anche sopra una zona di colore chiaro.
+        ? Color.lerp(
+            widget.background,
+            Colors.black,
+            _MenuIconButton._disabledMix,
+          )!
+        : _pressed
         ? Color.lerp(
             widget.background,
             widget.foreground,
@@ -1412,12 +1440,16 @@ class _MenuIconButtonState extends State<_MenuIconButton> {
       message: widget.tooltip,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTapDown: (_) => _setPressed(true),
-        onTapUp: (_) {
-          _setPressed(false);
-          widget.onTap();
-        },
-        onTapCancel: () => _setPressed(false),
+        // Senza i gestori la voce non entra nell'arena dei tocchi: non si
+        // preme, non si illumina e non lascia il velo appiccicato.
+        onTapDown: enabled ? (_) => _setPressed(true) : null,
+        onTapUp: enabled
+            ? (_) {
+                _setPressed(false);
+                widget.onTap();
+              }
+            : null,
+        onTapCancel: enabled ? () => _setPressed(false) : null,
         child: SizedBox(
           width: widget.size,
           height: widget.size,
