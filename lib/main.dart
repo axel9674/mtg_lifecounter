@@ -384,6 +384,12 @@ const String _kTimerDeadlineKey = 'timerDeadline';
 /// c'era niente da leggere.
 Color? _storedColor(int? value) => value == null ? null : Color(value);
 
+/// Durata dell'animazione con cui i tre pulsanti delle vite compaiono sopra la
+/// voce "Nuova partita" del menu. La usano sia il picker sia la sua copia
+/// invisibile: se i due tempi non fossero identici il menu si muoverebbe
+/// mentre i pulsanti crescono.
+const Duration _kLifePickerDuration = Duration(milliseconds: 180);
+
 class _LifeCounterHomeState extends State<LifeCounterHome>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   int player1Life = kStartingLife;
@@ -1223,6 +1229,14 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
 
   @override
   Widget build(BuildContext context) {
+    // La scelta delle vite e' lo stesso widget in due posti: quello vero sopra
+    // la voce "Nuova partita" e una copia invisibile sotto il menu, che serve
+    // solo a tenere il gruppo simmetrico attorno al centro del menu.
+    final lifePicker = _LifePresetPicker(
+      life: _startingLife,
+      onSelected: startNewGame,
+    );
+
     return Scaffold(
       body: Stack(
         children: [
@@ -1246,7 +1260,7 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
                 // (così non modificano le vite) ma non chiude il menu.
                 // Per chiudere si usa solo la X al centro.
                 child: AbsorbPointer(
-                  child: Container(color: Colors.black.withOpacity(0.55)),
+                  child: Container(color: Colors.black.withOpacity(0.68)),
                 ),
               ),
             // Mentre si sceglie un colore il menu centrale sparisce del
@@ -1257,27 +1271,27 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
                 // arriva a occupare tutta l'altezza, la scritta non finisca a
                 // filo del bordo.
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  padding: const EdgeInsets.symmetric(vertical: 8),
                   // La scelta delle vite e il menu sono un gruppo unico, quindi
                   // i tre pulsanti stanno esattamente sopra la voce "Nuova
-                  // partita". In orizzontale, dove l'altezza e' poca, il gruppo
-                  // si rimpicciolisce invece di uscire dallo schermo.
+                  // partita". La copia invisibile sotto il menu tiene il
+                  // gruppo simmetrico rispetto al suo centro: cosi' i pulsanti
+                  // compaiono **senza che il menu si sposti**, nemmeno di un
+                  // pixel. In orizzontale, dove il gruppo non entrerebbe,
+                  // l'insieme si rimpicciolisce invece di uscire dallo schermo.
                   child: FittedBox(
                     fit: BoxFit.scaleDown,
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         AnimatedSize(
-                          duration: const Duration(milliseconds: 180),
+                          duration: _kLifePickerDuration,
                           curve: Curves.easeOutCubic,
                           // Cresce verso l'alto, staccandosi dal menu: e' cosi'
                           // che compare, appesa alla sua voce.
                           alignment: Alignment.bottomCenter,
                           child: _lifePickerOpen
-                              ? _LifePresetPicker(
-                                  life: _startingLife,
-                                  onSelected: startNewGame,
-                                )
+                              ? lifePicker
                               : const SizedBox.shrink(),
                         ),
                         RadialMenu(
@@ -1285,6 +1299,18 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
                           open: _menuOpen,
                           items: _buildMenuItems(),
                           onToggle: toggleMenu,
+                        ),
+                        AnimatedSize(
+                          duration: _kLifePickerDuration,
+                          curve: Curves.easeOutCubic,
+                          alignment: Alignment.topCenter,
+                          // Solo il posto occupato dalla scelta, senza
+                          // disegnarla e senza lasciarla toccare.
+                          child: _lifePickerOpen
+                              ? IgnorePointer(
+                                  child: Opacity(opacity: 0, child: lifePicker),
+                                )
+                              : const SizedBox.shrink(),
                         ),
                       ],
                     ),

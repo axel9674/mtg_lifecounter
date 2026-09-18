@@ -98,13 +98,17 @@ fra una build e l'altra.
   volta sola, e toccare il timer (o azzerarlo) la zittisce.
 - La voce "Nuova partita" (icona refresh) non apre nessun popup: mostra `_LifePresetPicker`,
   cioe' i tre pulsanti 20/30/40 con sopra la scritta "Seleziona i Punti Vita iniziali".
-  Il blocco (picker + `RadialMenu`) e' una `Column` unica dentro un `FittedBox(scaleDown)`:
-  cosi' i pulsanti stanno esattamente sopra la voce del menu e in orizzontale, dove
-  l'altezza e' poca, il gruppo si rimpicciolisce invece di uscire dallo schermo.
+  Il blocco (picker + `RadialMenu`) e' una `Column` unica dentro un `FittedBox(scaleDown)`,
+  ordine: `AnimatedSize(picker)` -> `RadialMenu` -> `AnimatedSize(copia invisibile del
+  picker)`. La copia (`IgnorePointer` + `Opacity: 0`) tiene il gruppo **simmetrico rispetto
+  al centro del menu**, cosi' il menu **non si sposta di un pixel** quando i pulsanti
+  compaiono; i due `AnimatedSize` devono durare lo stesso tempo (`_kLifePickerDuration`).
+  In orizzontale, dove il gruppo non entra, si rimpicciolisce invece di uscire dallo schermo.
   Toccando un valore la partita riparte subito (`startNewGame` → `resetLife`), la scelta e il
   menu si chiudono. La quantita' resta in `_startingLife` ed e' ricordata (chiave
   `startingLife`), quindi il tooltip della voce dice sempre il numero corrente.
   `_lifePickerOpen` si spegne anche in `closeMenu()`: la scelta vive appesa al menu.
+- Il velo scuro che copre la partita col menu aperto e' `Colors.black.withOpacity(0.68)`.
 - `RadialMenu` + `TimerSetupDialog` / `ColorPalette`: overlay che **non si
   chiudono** con un tocco sullo sfondo (`AbsorbPointer`, non un `GestureDetector` vuoto).
 - `_PresetButton` (etichetta + stato scelto) e' il pulsante tondo condiviso dai preset del
