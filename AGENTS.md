@@ -98,12 +98,15 @@ fra una build e l'altra.
   volta sola, e toccare il timer (o azzerarlo) la zittisce.
 - La voce "Nuova partita" (icona refresh) non apre nessun popup: mostra `_LifePresetPicker`,
   cioe' i tre pulsanti 20/30/40 con sopra la scritta "Seleziona i Punti Vita iniziali".
-  Il blocco (picker + `RadialMenu`) e' una `Column` unica dentro un `FittedBox(scaleDown)`,
-  ordine: `AnimatedSize(picker)` -> `RadialMenu` -> `AnimatedSize(copia invisibile del
-  picker)`. La copia (`IgnorePointer` + `Opacity: 0`) tiene il gruppo **simmetrico rispetto
-  al centro del menu**, cosi' il menu **non si sposta di un pixel** quando i pulsanti
-  compaiono; i due `AnimatedSize` devono durare lo stesso tempo (`_kLifePickerDuration`).
-  In orizzontale, dove il gruppo non entra, si rimpicciolisce invece di uscire dallo schermo.
+  In **verticale** il picker e' attaccato sopra la voce del menu (una `Column` dentro
+  `FittedBox(scaleDown)`, ordine: `AnimatedSize(picker)` -> `RadialMenu` -> `AnimatedSize(copia
+  invisibile del picker)`). La copia (`IgnorePointer` + `Opacity: 0`) tiene il gruppo
+  **simmetrico rispetto al centro del menu**, cosi' il menu **non si sposta di un pixel**
+  quando i pulsanti compaiono; i due `AnimatedSize` devono durare lo stesso tempo
+  (`_kLifePickerDuration`). In **orizzontale** l'altezza e' poca, quindi la scelta si stacca e
+  va a sinistra (`Alignment.centerLeft`, `_kLifePickerInset`) dentro `_LifePickerPanel`
+  (fondo scuro + ombra, come il box del timer) e il menu resta al centro a misura piena.
+  Tutto questo lo monta `_buildMenuOverlay()`.
   Toccando un valore la partita riparte subito (`startNewGame` → `resetLife`), la scelta e il
   menu si chiudono. La quantita' resta in `_startingLife` ed e' ricordata (chiave
   `startingLife`), quindi il tooltip della voce dice sempre il numero corrente.

@@ -390,6 +390,11 @@ Color? _storedColor(int? value) => value == null ? null : Color(value);
 /// mentre i pulsanti crescono.
 const Duration _kLifePickerDuration = Duration(milliseconds: 180);
 
+/// Distanza della scelta delle vite dal bordo sinistro dello schermo quando il
+/// telefono e' in orizzontale (dove la scelta si stacca dal menu e va a
+/// sinistra).
+const double _kLifePickerInset = 18;
+
 class _LifeCounterHomeState extends State<LifeCounterHome>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   int player1Life = kStartingLife;
@@ -1229,14 +1234,6 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
 
   @override
   Widget build(BuildContext context) {
-    // La scelta delle vite e' lo stesso widget in due posti: quello vero sopra
-    // la voce "Nuova partita" e una copia invisibile sotto il menu, che serve
-    // solo a tenere il gruppo simmetrico attorno al centro del menu.
-    final lifePicker = _LifePresetPicker(
-      life: _startingLife,
-      onSelected: startNewGame,
-    );
-
     return Scaffold(
       body: Stack(
         children: [
@@ -1263,60 +1260,7 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
                   child: Container(color: Colors.black.withOpacity(0.68)),
                 ),
               ),
-            // Mentre si sceglie un colore il menu centrale sparisce del
-            // tutto: non è né visibile né utilizzabile.
-            if (!_paletteOpen)
-              Center(
-                // Un filo di margine perche' in orizzontale, dove il gruppo
-                // arriva a occupare tutta l'altezza, la scritta non finisca a
-                // filo del bordo.
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  // La scelta delle vite e il menu sono un gruppo unico, quindi
-                  // i tre pulsanti stanno esattamente sopra la voce "Nuova
-                  // partita". La copia invisibile sotto il menu tiene il
-                  // gruppo simmetrico rispetto al suo centro: cosi' i pulsanti
-                  // compaiono **senza che il menu si sposti**, nemmeno di un
-                  // pixel. In orizzontale, dove il gruppo non entrerebbe,
-                  // l'insieme si rimpicciolisce invece di uscire dallo schermo.
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        AnimatedSize(
-                          duration: _kLifePickerDuration,
-                          curve: Curves.easeOutCubic,
-                          // Cresce verso l'alto, staccandosi dal menu: e' cosi'
-                          // che compare, appesa alla sua voce.
-                          alignment: Alignment.bottomCenter,
-                          child: _lifePickerOpen
-                              ? lifePicker
-                              : const SizedBox.shrink(),
-                        ),
-                        RadialMenu(
-                          animation: _menuController,
-                          open: _menuOpen,
-                          items: _buildMenuItems(),
-                          onToggle: toggleMenu,
-                        ),
-                        AnimatedSize(
-                          duration: _kLifePickerDuration,
-                          curve: Curves.easeOutCubic,
-                          alignment: Alignment.topCenter,
-                          // Solo il posto occupato dalla scelta, senza
-                          // disegnarla e senza lasciarla toccare.
-                          child: _lifePickerOpen
-                              ? IgnorePointer(
-                                  child: Opacity(opacity: 0, child: lifePicker),
-                                )
-                              : const SizedBox.shrink(),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
+            ..._buildMenuOverlay(),
             // Versione dell'app, in fondo a sinistra: e' l'ultima cosa dello
             // Stack, quindi sta sopra il velo scuro del menu. Compare e
             // sparisce con le voci, cosi' mentre si gioca il pannello resta
@@ -1334,6 +1278,102 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
         ],
       ),
     );
+  }
+
+  /// Il menu radiale e la scelta delle vite, che vive appesa alla sua voce
+  /// "Nuova partita".
+  ///
+  /// In verticale i tre pulsanti stanno **sopra** il menu e una copia
+  /// invisibile, sotto il menu, tiene il gruppo simmetrico rispetto al suo
+  /// centro: cosi' il menu non si sposta di un pixel quando i pulsanti
+  /// compaiono. In orizzontale l'altezza e' poca (411 px sul S24) e il gruppo
+  /// rimpicciolirebbe il menu: la scelta si stacca e si mette a sinistra, dove
+  /// c'e' spazio libero, e il menu resta al centro a misura piena.
+  List<Widget> _buildMenuOverlay() {
+    // Mentre si sceglie un colore il menu centrale sparisce del tutto: non e'
+    // ne' visibile ne' utilizzabile.
+    if (_paletteOpen) return const [];
+
+    final menu = RadialMenu(
+      animation: _menuController,
+      open: _menuOpen,
+      items: _buildMenuItems(),
+      onToggle: toggleMenu,
+    );
+
+    if (_isWide(context)) {
+      return [
+        Center(child: menu),
+        // La scelta si stacca dal menu: e' un pannellino flottante come il
+        // timer, col suo fondo scuro e la sua ombra, perche' sta sopra il
+        // tavolo di gioco e non dentro un pannello.
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Padding(
+            padding: EdgeInsets.only(
+              left: MediaQuery.paddingOf(context).left + _kLifePickerInset,
+            ),
+            child: AnimatedSize(
+              duration: _kLifePickerDuration,
+              curve: Curves.easeOutCubic,
+              // Cresce verso destra, allontanandosi dal bordo.
+              alignment: Alignment.centerLeft,
+              child: _lifePickerOpen
+                  ? _LifePickerPanel(
+                      child: _LifePresetPicker(
+                        life: _startingLife,
+                        onSelected: startNewGame,
+                        bottomGap: 0,
+                      ),
+                    )
+                  : const SizedBox.shrink(),
+            ),
+          ),
+        ),
+      ];
+    }
+
+    final picker = _LifePresetPicker(
+      life: _startingLife,
+      onSelected: startNewGame,
+    );
+
+    return [
+      Center(
+        // Un filo di margine perche' il gruppo arriva vicino all'altezza dello
+        // schermo.
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AnimatedSize(
+                  duration: _kLifePickerDuration,
+                  curve: Curves.easeOutCubic,
+                  // Cresce verso l'alto, staccandosi dal menu: e' cosi' che
+                  // compare, appesa alla sua voce.
+                  alignment: Alignment.bottomCenter,
+                  child: _lifePickerOpen ? picker : const SizedBox.shrink(),
+                ),
+                menu,
+                AnimatedSize(
+                  duration: _kLifePickerDuration,
+                  curve: Curves.easeOutCubic,
+                  alignment: Alignment.topCenter,
+                  // Solo il posto occupato dalla scelta, senza disegnarla e
+                  // senza lasciarla toccare.
+                  child: _lifePickerOpen
+                      ? IgnorePointer(child: Opacity(opacity: 0, child: picker))
+                      : const SizedBox.shrink(),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ];
   }
 }
 
@@ -3045,13 +3085,21 @@ class _LifePresetPicker extends StatelessWidget {
   final int life;
   final ValueChanged<int> onSelected;
 
-  const _LifePresetPicker({required this.life, required this.onSelected});
+  /// Stacco dalla voce del menu che sta appena sotto: serve solo quando il
+  /// pulsante sta attaccato al menu (in verticale), non quando e' un pannellino
+  /// a se' (in orizzontale).
+  final double bottomGap;
+
+  const _LifePresetPicker({
+    required this.life,
+    required this.onSelected,
+    this.bottomGap = 14,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      // Stacco dalla voce del menu, che sta appena sotto.
-      padding: const EdgeInsets.only(bottom: 14),
+      padding: EdgeInsets.only(bottom: bottomGap),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -3081,6 +3129,35 @@ class _LifePresetPicker extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Pannellino flottante per la scelta delle vite quando sta da sola (in
+/// orizzontale): fondo scuro, angoli tondi e ombra come il box del timer, cosi'
+/// si legge sopra il tavolo di gioco senza sembrare una finestra di sistema.
+class _LifePickerPanel extends StatelessWidget {
+  final Widget child;
+
+  const _LifePickerPanel({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+      decoration: BoxDecoration(
+        color: const Color(0xD0000000),
+        borderRadius: BorderRadius.circular(20),
+        // Ombra leggera: stacca il pannellino dalla schermata sottostante.
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x66000000),
+            blurRadius: 14,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: child,
     );
   }
 }
