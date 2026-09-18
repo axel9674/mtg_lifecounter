@@ -1,11 +1,11 @@
 # Costruisce l'APK release dandogli la stessa etichetta che gli da' la pipeline:
 #   MTG-Life-Counter-<versione>-build<numero>.apk
 #
-# Versione = tag git piu' recente raggiungibile (v1.2.3 -> 1.2.3), numero di
-# build = numero di commit del ramo. Sono gli stessi due numeri che usa
-# `.github/workflows/build-release.yml`, quindi l'APK costruito qui e quello
-# scaricato da GitHub, per lo stesso commit, hanno lo stesso nome e lo stesso
-# `versionCode`: si installano uno sopra l'altro senza sorprese.
+# Versione e numero di build vengono dal `version:` di `pubspec.yaml` (`nome+numero`),
+# cioe' dalla stessa riga che usa `flutter run`: l'APK costruito qui, quello della
+# pipeline e la versione mostrata dentro il menu dicono sempre la stessa cosa.
+# Il tag git non serve a costruire, serve solo a ricordare qual e' l'ultima
+# versione pubblicata (se non combacia, lo script avvisa).
 #
 # Uso:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tool\build_apk.ps1
@@ -23,36 +23,20 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
 
-# La versione dal tag piu' recente; senza tag si ripiega sul `version:` di
-# pubspec.yaml, togliendo il `+numero`.
-function Get-NomeVersione {
-    # Se git non c'e' o non ci sono tag, l'output non e' un tag valido e si
-    # finisce nel ripiego (l'errore di git arriva su stderr, non serve vederlo).
-    $tag = try { "$(git describe --tags --match 'v[0-9]*' --abbrev=0 2>&1)".Trim() } catch { '' }
-    if ($tag -match '^v[0-9]') { return $tag.TrimStart('v') }
-
-    $riga = Select-String -Path pubspec.yaml -Pattern '^version:' | Select-Object -First 1
-    if (-not $riga) { throw "Nessun tag git e nessun 'version:' in pubspec.yaml" }
-    return ($riga.Line -split ':', 2)[1].Trim().Split('+')[0]
+# Unica fonte della versione: `nome+numero` dal `version:` di pubspec.yaml.
+$riga = Select-String -Path pubspec.yaml -Pattern '^version:' | Select-Object -First 1
+if (-not $riga) { throw "Nessuna 'version:' in pubspec.yaml" }
+$versione = ($riga.Line -split ':', 2)[1].Trim()
+if ($versione -notmatch '^(\d+\.\d+\.\d+)\+([1-9]\d*)$') {
+    throw "version: '$versione' non ha la forma nome+numero (es. 1.0.2+3)"
 }
-
-$nome = Get-NomeVersione
-# Stesso contatore della pipeline: cresce di uno a ogni commit, quindi il
-# versionCode non torna mai indietro (Android rifiuta l'installazione con
-# INSTALL_FAILED_VERSION_DOWNGRADE se il numero cala).
-$conteggio = try { "$(git rev-list --count HEAD 2>&1)".Trim() } catch { '' }
-if ($conteggio -notmatch '^\d+$' -or [int]$conteggio -le 0) {
-    throw 'Conteggio dei commit non riuscito: serve un repo git con la sua storia.'
-}
-$numero = [int]$conteggio
-
-# La versione in pubspec.yaml e' quella che mostra `flutter run` (e la scritta
-# in fondo al menu): se resta indietro rispetto al tag, l'app dice una cosa e
-# l'APK un'altra. Qui si avvisa soltanto: pubspec si aggiorna a mano, quando si
-# prepara la release.
-$rigaPubspec = Select-String -Path pubspec.yaml -Pattern '^version:' | Select-Object -First 1
-if (($rigaPubspec.Line -split ':', 2)[1].Trim().Split('+')[0] -ne $nome) {
-    Write-Warning "pubspec.yaml non e' allineato al tag: `flutter run` mostrera' un'altra versione."
+$nome = $Matches[1]
+# Il numero di build e' il versionCode di Android: solo un avviso se il tag piu'
+# recente racconta un'altra storia (pubspec non allineato al momento del tag).
+$numero = [int]$Matches[2]
+$tag = try { "$(git describe --tags --match 'v[0-9]*' --abbrev=0 2>&1)".Trim() } catch { '' }
+if ($tag -match '^v[0-9]' -and $tag.TrimStart('v') -ne $nome) {
+    Write-Warning "pubspec.yaml dice $versione, ma l'ultimo tag e' $tag"
 }
 
 $file = "MTG-Life-Counter-$nome-build$numero.apk"

@@ -38,10 +38,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-        with:
-          # Servono la storia e i tag: il numero di build e' il conteggio dei commit
-          # (senza `fetch-depth: 0` il clone e' shallow e il conteggio vale 1).
-          fetch-depth: 0
 
       - name: Java 17
         uses: actions/setup-java@v6
@@ -65,21 +61,29 @@ jobs:
         run: flutter analyze lib
         continue-on-error: true
 
-      # Da un tag `v1.2.3` ricavo 1.2.3, altrimenti uso il `version:` di pubspec.yaml.
-      # Il numero di build e' il numero di commit del ramo, cioe' lo stesso che usa
-      # `tool/build_apk.ps1`: un APK costruito in locale e quello pubblicato per lo
-      # stesso commit hanno cosi' lo stesso nome e lo stesso versionCode, e il
-      # versionCode non torna mai indietro fra una release e la successiva.
+      # La versione sta in `version:` di pubspec.yaml (`nome+numero`) ed e' l'unica
+      # fonte: la usano anche `flutter run` e `tool/build_apk.ps1`, quindi l'APK qui
+      # costruito e quello locale hanno la stessa etichetta e lo stesso versionCode.
+      # Il tag fornisce il nome della release; il numero di build non deve mai calare
+      # (Android rifiuta l'installazione con INSTALL_FAILED_VERSION_DOWNGRADE).
       - name: Calcola la versione
         id: versione
         shell: bash
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            nome="${GITHUB_REF_NAME#v}"
-          else
-            nome="$(sed -n 's/^version: *\([^+ ]*\).*/\1/p' pubspec.yaml | head -n1)"
+          pubspec="$(sed -n 's/^version: *//p' pubspec.yaml | head -n1)"
+          nome="${pubspec%%+*}"
+          numero="${pubspec##*+}"
+          if [[ ! "$numero" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::version: '$pubspec' non ha la forma nome+numero (es. 1.0.2+3)"
+            exit 1
           fi
-          numero="$(git rev-list --count HEAD)"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF_NAME#v}"
+            if [[ "$tag" != "$nome" ]]; then
+              echo "::warning::Il tag $GITHUB_REF_NAME non combacia col version: '$pubspec' di pubspec.yaml"
+            fi
+            nome="$tag"
+          fi
           echo "nome=$nome" >> "$GITHUB_OUTPUT"
           echo "numero=$numero" >> "$GITHUB_OUTPUT"
           echo "file=MTG-Life-Counter-$nome-build$numero.apk" >> "$GITHUB_OUTPUT"

@@ -42,11 +42,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tool\build_apk.ps1          
 powershell -NoProfile -ExecutionPolicy Bypass -File tool\build_apk.ps1 -Install   # build + adb install -r
 ```
 
-Versione e numero di build li prende da git: nome dall'ultimo tag (`v1.0.1` → `1.0.1`), numero
-dai commit del ramo. Sono gli stessi due numeri della pipeline, quindi per lo stesso commit
-l'APK locale e quello scaricato da GitHub hanno lo stesso nome e lo stesso `versionCode` (e il
-`versionCode` non torna mai indietro: Android rifiuterebbe l'installazione con
-`INSTALL_FAILED_VERSION_DOWNGRADE`). L'APK esce come
+Versione e numero di build vengono dal `version:` di `pubspec.yaml` (`nome+numero`), cioe' dalla
+**stessa riga** che usa `flutter run`: APK locale, APK della pipeline e scritta in fondo al menu
+dicono cosi' sempre la stessa cosa. Il numero dopo il `+` e' il `versionCode` di Android e **non
+deve mai calare**: se cala, `adb install -r` fallisce con `INSTALL_FAILED_VERSION_DOWNGRADE` e
+`flutter run`, che dopo il fallimento disinstalla la versione vecchia, si porta via vite, colori
+e timer salvati. L'APK esce come
 `build\app\outputs\flutter-apk\MTG-Life-Counter-<versione>-build<numero>.apk`, accanto a
 `app-release.apk` che resta.
 
@@ -201,10 +202,11 @@ i due comandi; non si editano i PNG.
 - L'APK esce come `MTG-Life-Counter-<versione>-build<numero>.apk` (non `app-release.apk`):
   ci pensa lo step `Prepara l'artefatto`, che rinomina la copia in `dist/`. Stesso nome che da'
   `tool/build_apk.ps1` per lo stesso commit.
-- Versione: dal tag (`v1.2.3` → `1.2.3`) altrimenti dal `version:` di `pubspec.yaml`. Il numero
-  di build e' `git rev-list --count HEAD` (i commit del ramo), passato a `--build-number`: stessa
-  fonte dello script locale, e cresce a ogni commit, quindi il `versionCode` non torna mai
-  indietro. Il checkout ha `fetch-depth: 0` proprio perche' il conteggio serva la storia intera.
+- Versione: **tutta dal `version:` di `pubspec.yaml`** (`nome+numero`), unica fonte per
+  `flutter run`, `tool/build_apk.ps1` e questa pipeline. Il tag fornisce solo il nome della
+  release (`v1.2.3` → `1.2.3`), e se non combacia col pubspec la pipeline lo segnala con un
+  `::warning::`; senza tag il nome viene dal pubspec. Il numero dopo il `+` e' il `versionCode`
+  e viene passato a `--build-number`: **non deve mai calare**.
 - A release pubblicata lo step `Notifica su Telegram` manda un messaggio con il link diretto
   all'APK (`releases/download/<tag>/<file>`) e quello alle note. Serve il nome del file, che
   il job `build` espone come output (`outputs.file` da `steps.versione.outputs.file`).
@@ -217,21 +219,22 @@ i due comandi; non si editano i PNG.
 
 ### Come si pubblica una release
 
-1. portare il `version:` di `pubspec.yaml` alla versione che si sta per taggare e committare:
-   e' quella che mostrera' `flutter run` e la scritta in fondo al menu;
+1. portare il `version:` di `pubspec.yaml` alla versione che si sta per taggare **alzando il
+   numero di build** (es. `1.0.1+2` → `1.0.2+3`) e committare: e' quella che mostrera' `flutter run`,
+   la scritta in fondo al menu e l'APK della release;
 2. `git push origin develop` (il ramo, se si vuole che resti allineato);
 3. `git tag v1.0.2` sul commit da pubblicare;
 4. `git push origin v1.0.2`.
 
 **E' il tag che fa partire tutto**: build + release + notifica Telegram. Non serve toccare
-`main`. Il tag deve chiamarsi `v<numero>` (da li' viene la versione dell'APK) e deve stare su un
-commit che contiene `.github/workflows/build-release.yml`, perche' GitHub esegue il workflow
-del commit spinto.
+`main`. Il tag deve chiamarsi `v<numero>` (deve combaciare col `version:` di pubspec, altrimenti
+la pipeline avvisa) e deve stare su un commit che contiene
+`.github/workflows/build-release.yml`, perche' GitHub esegue il workflow del commit spinto.
 
 ## Fonti di verita'
 
 - `lib/main.dart` — l'app.
-- `pubspec.yaml` — dipendenze, font, configurazione icona, versione mostrata da `flutter run`.
+- `pubspec.yaml` — dipendenze, font, configurazione icona e **versione** (unica fonte).
 - `tool/make_icon.ps1` — l'icona.
 - `tool/build_apk.ps1` — l'APK locale, con nome e numero della release.
 - `.github/workflows/build-release.yml` — build e release dell'APK.

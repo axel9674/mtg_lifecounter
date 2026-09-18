@@ -17,10 +17,12 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
 #
-# Qui c'e' l'ultima versione **pubblicata** (il tag v1.0.1): serve a `flutter run`
-# e alla scritta della versione dentro il menu. Gli APK invece prendono nome e
-# numero dal tag git (vedi `tool/build_apk.ps1` e la pipeline), quindi questa
-# riga va solo tenuta allineata al tag quando si prepara una release.
+# Questa riga e' l'**unica fonte** della versione: la usano `flutter run`, la
+# scritta in fondo al menu, `tool/build_apk.ps1` e la pipeline. Il nome prima del
+# `+` e' l'etichetta, il numero dopo e' il `versionCode` di Android: **non deve
+# mai calare**, altrimenti l'installazione viene rifiutata come downgrade. A ogni
+# release si porta la riga alla versione che si sta per taggare e si alza il
+# numero di build (es. 1.0.2+3).
 version: 1.0.1+2
 
 environment:
