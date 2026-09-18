@@ -61,21 +61,33 @@ jobs:
         run: flutter analyze lib
         continue-on-error: true
 
-      # Da un tag `v1.2.3` ricavo 1.2.3, altrimenti uso il `version:` di pubspec.yaml.
-      # Il numero di build e' il numero della run, cosi' ogni APK ha un versionCode diverso.
+      # La versione sta in `version:` di pubspec.yaml (`nome+numero`) ed e' l'unica
+      # fonte: la usano anche `flutter run` e `tool/build_apk.ps1`, quindi l'APK qui
+      # costruito e quello locale hanno la stessa etichetta e lo stesso versionCode.
+      # Il tag fornisce il nome della release; il numero di build non deve mai calare
+      # (Android rifiuta l'installazione con INSTALL_FAILED_VERSION_DOWNGRADE).
       - name: Calcola la versione
         id: versione
         shell: bash
         run: |
+          pubspec="$(sed -n 's/^version: *//p' pubspec.yaml | head -n1)"
+          nome="${pubspec%%+*}"
+          numero="${pubspec##*+}"
+          if [[ ! "$numero" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::version: '$pubspec' non ha la forma nome+numero (es. 1.0.2+3)"
+            exit 1
+          fi
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            nome="${GITHUB_REF_NAME#v}"
-          else
-            nome="$(sed -n 's/^version: *\([^+ ]*\).*/\1/p' pubspec.yaml | head -n1)"
+            tag="${GITHUB_REF_NAME#v}"
+            if [[ "$tag" != "$nome" ]]; then
+              echo "::warning::Il tag $GITHUB_REF_NAME non combacia col version: '$pubspec' di pubspec.yaml"
+            fi
+            nome="$tag"
           fi
           echo "nome=$nome" >> "$GITHUB_OUTPUT"
-          echo "numero=$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
-          echo "file=MTG-Life-Counter-$nome-build$GITHUB_RUN_NUMBER.apk" >> "$GITHUB_OUTPUT"
-          echo "Versione $nome+$GITHUB_RUN_NUMBER"
+          echo "numero=$numero" >> "$GITHUB_OUTPUT"
+          echo "file=MTG-Life-Counter-$nome-build$numero.apk" >> "$GITHUB_OUTPUT"
+          echo "Versione $nome+$numero"
 
       # La release e' firmata con la debug key (android/app/build.gradle.kts): va bene
       # per il sideload, non per pubblicare sul Play Store.
@@ -85,9 +97,8 @@ jobs:
             --build-name "${{ steps.versione.outputs.nome }}" \
             --build-number "${{ steps.versione.outputs.numero }}"
 
-      # Nome del file: MTG-Life-Counter-<versione>-build<numero>.apk. Il numero di
-      # build c'e' perche' due run sulla stessa versione (pubspec invariato) devono
-      # produrre due file distinti: scaricandoli non si sovrascrivono a vicenda.
+      # Nome del file: MTG-Life-Counter-<versione>-build<numero>.apk. Uguale a quello
+      # che produce `tool/build_apk.ps1` per lo stesso commit.
       - name: Prepara l'artefatto
         run: |
           mkdir -p dist

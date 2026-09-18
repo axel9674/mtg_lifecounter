@@ -29,13 +29,27 @@ flutter build apk --release     # APK in build\app\outputs\flutter-apk\
 adb install -r build\app\outputs\flutter-apk\app-release.apk   # aggiorna l'APK sul telefono
 ```
 
-Per l'APK: la `release` e' firmata **con la debug key** (`android/app/build.gradle.kts`), quindi
-si installa per sideload ma non si pubblica. Va bene cosi': e' un'app personale.
-
 Per installare usare `adb install -r`, **non** `flutter install`: quest'ultimo disinstalla prima,
 e con l'app se ne va il salvataggio delle vite (i dati stanno nella cartella privata dell'app).
 `-r` lascia la cartella intatta e la sostituzione riesce perche' la firma (debug key) non cambia
-fra una build e l'altra.
+fra una build e l'altra. La release e' firmata con la debug key, quindi va bene per il sideload
+ma non si pubblica sul Play Store: e' un'app personale.
+
+Per l'APK con lo stesso nome della release c'e' `tool/build_apk.ps1`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tool\build_apk.ps1            # solo build
+powershell -NoProfile -ExecutionPolicy Bypass -File tool\build_apk.ps1 -Install   # build + adb install -r
+```
+
+Versione e numero di build vengono dal `version:` di `pubspec.yaml` (`nome+numero`), cioe' dalla
+**stessa riga** che usa `flutter run`: APK locale, APK della pipeline e scritta in fondo al menu
+dicono cosi' sempre la stessa cosa. Il numero dopo il `+` e' il `versionCode` di Android e **non
+deve mai calare**: se cala, `adb install -r` fallisce con `INSTALL_FAILED_VERSION_DOWNGRADE` e
+`flutter run`, che dopo il fallimento disinstalla la versione vecchia, si porta via vite, colori
+e timer salvati. L'APK esce come
+`build\app\outputs\flutter-apk\MTG-Life-Counter-<versione>-build<numero>.apk`, accanto a
+`app-release.apk` che resta.
 
 ## Regole operative
 
@@ -85,15 +99,50 @@ fra una build e l'altra.
   rettangoli arrotondati.
 - `GameTimerBox` / `_FloatingTimer`: il timer e' un box **fluttuante sopra** le zone (uno per
   ogni verso di lettura, quando il flip e' attivo), non una fascia che sposta il contatore.
-  Tocco = avvia/pausa, long press = azzera. Anche "Reset a 20" azzera il timer.
-- `RadialMenu` + `TimerSetupDialog` / `ColorPalette`: overlay che **non si chiudono** con un
-  tocco sullo sfondo (`AbsorbPointer`, non un `GestureDetector` vuoto).
+  Tocco = avvia/pausa, long press = azzera. La voce "Nuova partita" **non** tocca il timer
+  (le vite si azzerano solo dal menu, il tempo no).
+  Il timer **conta sull'orologio**, non sui tick: `_timerDeadline` e' un istante assoluto
+  (salvato in `timerDeadline` mentre scorre), quindi il tempo resta giusto anche chiudendo
+  l'app e il conto riprende da solo alla riapertura. Fuori dal primo piano il ticker si
+  ferma e al ritorno `_syncTimerWithClock()` rimette il tempo in pari: se la scadenza e'
+  passata mentre l'app era via il tempo finisce **senza** suono (nessuno era li' a sentirlo).
+  A fine tempo vibra e suona la sveglia di sistema sul canale delle sveglie: il suono lo fa
+  `android/.../MainActivity.kt` (canale `mtg_lifecounter/alarm`, `STREAM_ALARM`), perche' non
+  deve dipendere dal volume dei media; altrove si ripiega su `SystemSound.alert`. Suona una
+  volta sola, e toccare il timer (o azzerarlo) la zittisce.
+- La voce "Nuova partita" (icona refresh) non apre nessun popup: mostra `_LifePresetPicker`,
+  cioe' i tre pulsanti 20/30/40 con sopra la scritta "Seleziona i Punti Vita iniziali".
+  In **verticale** il picker e' attaccato sopra la voce del menu (una `Column` dentro
+  `FittedBox(scaleDown)`, ordine: `AnimatedSize(picker)` -> `RadialMenu` -> `AnimatedSize(copia
+  invisibile del picker)`). La copia (`IgnorePointer` + `Opacity: 0`) tiene il gruppo
+  **simmetrico rispetto al centro del menu**, cosi' il menu **non si sposta di un pixel**
+  quando i pulsanti compaiono; i due `AnimatedSize` devono durare lo stesso tempo
+  (`_kLifePickerDuration`). In **orizzontale** l'altezza e' poca, quindi la scelta si stacca e
+  va a sinistra (`Alignment.centerLeft`, `_kLifePickerInset` dal bordo) e il menu resta al
+  centro a misura piena. La scelta e' **identica nelle due direzioni**: i tre pulsanti nudi,
+  senza fondo proprio, appoggiati al velo scuro del menu.
+  Tutto questo lo monta `_buildMenuOverlay()`.
+  Toccando un valore la partita riparte subito (`startNewGame` → `resetLife`), la scelta e il
+  menu si chiudono. La quantita' resta in `_startingLife` ed e' ricordata (chiave
+  `startingLife`), quindi il tooltip della voce dice sempre il numero corrente.
+  `_lifePickerOpen` si spegne anche in `closeMenu()`: la scelta vive appesa al menu.
+- Il velo scuro che copre la partita col menu aperto e' `Colors.black.withOpacity(0.82)`.
+- `RadialMenu` + `TimerSetupDialog` / `ColorPalette`: overlay che **non si
+  chiudono** con un tocco sullo sfondo (`AbsorbPointer`, non un `GestureDetector` vuoto).
+- `_PresetButton` (etichetta + stato scelto) e' il pulsante tondo condiviso dai preset del
+  timer e dalla scelta delle vite.
+- `_AppVersionLabel` scrive la versione dell'app piccola in fondo a sinistra mentre il menu e'
+  aperto (stessa animazione delle voci, `Opacity` + `IgnorePointer`). Il numero lo legge
+  `_loadAppVersion()` da `package_info_plus` (`versione+build`, quindi c'e' anche il numero di
+  build delle release); se la lettura fallisce o torna vuota (sul web `version.json` non c'e')
+  la scritta non compare. E' l'unica dipendenza oltre a quelle del contatore.
 - Persistenza in `shared_preferences` con chiavi `player1Life`, `player2Life`, `player1Color`,
   `player2Color`, `flipFirstLife`, `opponentLifeVisible`, `timerOn`, `timerMinutes`,
-  `timerSeconds`.
+  `timerSeconds`, `timerDeadline`, `startingLife`.
   `_restoreGame()` in `initState`, `_saveGame()` dopo ogni modifica, flag `_touched` per non
   sovrascrivere quello che l'utente ha gia' fatto. `SharedPreferences` e' sempre in `try/catch`.
-- Costanti notevoli in cima al file: `kStartingLife`, `kDefaultPanelColor`, `kPlayerColors`,
+- Costanti notevoli in cima al file: `kStartingLife`, `kMinStartingLife`, `kMaxStartingLife`,
+  `kDefaultPanelColor`, `kPlayerColors`,
   `kNumberFontSize`, `kNumberBoxWidth`, `kSignBoxWidth`, `kCounterGap`, `kLifeCounterScale`,
   `kCounterSideInset`, `kComboWindow`, `kComboScale`, `kNumberFontFamily`.
 
@@ -151,11 +200,13 @@ i due comandi; non si editano i PNG.
   commit taggato, la pipeline non parte. Un tag su `develop` funziona (il file e' li'), un push
   su `main` funziona solo quando `main` conterra' davvero il codice.
 - L'APK esce come `MTG-Life-Counter-<versione>-build<numero>.apk` (non `app-release.apk`):
-  ci pensa lo step `Prepara l'artefatto`, che rinomina la copia in `dist/`. Il numero di build
-  serve perche' due run sulla stessa versione restino due file distinti.
-- Versione: da `v1.2.3` diventa `1.2.3`, altrimenti si legge il `version:` di `pubspec.yaml`;
-  il numero di build e' sempre `GITHUB_RUN_NUMBER`, passato a `--build-number` (quindi ogni APK
-  ha un `versionCode` diverso anche se pubspec non cambia).
+  ci pensa lo step `Prepara l'artefatto`, che rinomina la copia in `dist/`. Stesso nome che da'
+  `tool/build_apk.ps1` per lo stesso commit.
+- Versione: **tutta dal `version:` di `pubspec.yaml`** (`nome+numero`), unica fonte per
+  `flutter run`, `tool/build_apk.ps1` e questa pipeline. Il tag fornisce solo il nome della
+  release (`v1.2.3` → `1.2.3`), e se non combacia col pubspec la pipeline lo segnala con un
+  `::warning::`; senza tag il nome viene dal pubspec. Il numero dopo il `+` e' il `versionCode`
+  e viene passato a `--build-number`: **non deve mai calare**.
 - A release pubblicata lo step `Notifica su Telegram` manda un messaggio con il link diretto
   all'APK (`releases/download/<tag>/<file>`) e quello alle note. Serve il nome del file, che
   il job `build` espone come output (`outputs.file` da `steps.versione.outputs.file`).
@@ -166,12 +217,28 @@ i due comandi; non si editano i PNG.
 - Flutter pinnato a `3.47.4` in cima al file (`env.FLUTTER_VERSION`): da aggiornare insieme
   all'SDK locale.
 
+### Come si pubblica una release
+
+1. portare il `version:` di `pubspec.yaml` alla versione che si sta per taggare **alzando il
+   numero di build** (es. `1.0.1+2` → `1.0.2+3`) e committare: e' quella che mostrera' `flutter run`,
+   la scritta in fondo al menu e l'APK della release;
+2. `git push origin develop` (il ramo, se si vuole che resti allineato);
+3. `git tag v1.0.2` sul commit da pubblicare;
+4. `git push origin v1.0.2`.
+
+**E' il tag che fa partire tutto**: build + release + notifica Telegram. Non serve toccare
+`main`. Il tag deve chiamarsi `v<numero>` (deve combaciare col `version:` di pubspec, altrimenti
+la pipeline avvisa) e deve stare su un commit che contiene
+`.github/workflows/build-release.yml`, perche' GitHub esegue il workflow del commit spinto.
+
 ## Fonti di verita'
 
 - `lib/main.dart` — l'app.
-- `pubspec.yaml` — dipendenze, font, configurazione icona.
+- `pubspec.yaml` — dipendenze, font, configurazione icona e **versione** (unica fonte).
 - `tool/make_icon.ps1` — l'icona.
+- `tool/build_apk.ps1` — l'APK locale, con nome e numero della release.
 - `.github/workflows/build-release.yml` — build e release dell'APK.
+- `android/app/src/main/kotlin/.../MainActivity.kt` — il canale del suono di fine tempo.
 - `android/app/src/main/AndroidManifest.xml` — nome app (`MTG Life Counter`) e icona.
 
 ## Git

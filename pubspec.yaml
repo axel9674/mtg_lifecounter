@@ -16,7 +16,14 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+#
+# Questa riga e' l'**unica fonte** della versione: la usano `flutter run`, la
+# scritta in fondo al menu, `tool/build_apk.ps1` e la pipeline. Il nome prima del
+# `+` e' l'etichetta, il numero dopo e' il `versionCode` di Android: **non deve
+# mai calare**, altrimenti l'installazione viene rifiutata come downgrade. A ogni
+# release si porta la riga alla versione che si sta per taggare e si alza il
+# numero di build (es. 1.0.2+3).
+version: 1.0.1+2
 
 environment:
   sdk: ^3.13.3
@@ -34,6 +41,10 @@ dependencies:
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
+  # Versione e numero di build del pacchetto installato: la scritta che compare
+  # nel menu. Sono gli stessi valori di pubspec.yaml (e delle release), quindi
+  # non c'e' un secondo posto da aggiornare a mano.
+  package_info_plus: ^10.2.1
   shared_preferences: ^2.5.5
   wakelock_plus: ^1.8.0
 

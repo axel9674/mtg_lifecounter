@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -195,6 +196,37 @@ const int kTimerDefaultMinutes = 20;
 const int kTimerMinMinutes = 1;
 const int kTimerMaxMinutes = 180;
 
+/// Canale verso il sistema per l'avviso di fine tempo.
+///
+/// Su Android risponde [MainActivity] con la sveglia di sistema, riprodotta sul
+/// canale delle sveglie: si sente anche con i suoni dei media a zero, che e'
+/// esattamente quello che serve quando il tempo scade mentre si sta giocando.
+const MethodChannel _kAlarmChannel = MethodChannel('mtg_lifecounter/alarm');
+
+/// Fa suonare l'avviso di fine tempo.
+///
+/// Fuori da Android (o se il canale non risponde) resta il suono di sistema,
+/// che e' meglio di niente: il tempo e' comunque finito.
+Future<void> _playTimerAlarm() async {
+  try {
+    await _kAlarmChannel.invokeMethod<void>('playAlarm');
+  } catch (_) {
+    try {
+      await SystemSound.play(SystemSoundType.alert);
+    } catch (_) {}
+  }
+}
+
+/// Zittisce l'avviso di fine tempo: il tempo e' stato rimesso in gioco (o
+/// azzerato) e un allarme che continua a suonare non serve piu' a nessuno.
+Future<void> _stopTimerAlarm() async {
+  try {
+    await _kAlarmChannel.invokeMethod<void>('stopAlarm');
+  } catch (_) {
+    // Fuori da Android non c'e' niente da fermare.
+  }
+}
+
 /// Segno "-" o "+" accanto alle cifre, in una scatola di larghezza fissa.
 class FixedWidthSign extends StatelessWidget {
   final String sign;
@@ -306,8 +338,14 @@ class PlayerColorOption {
 /// decisivo, quindi nessuna delle due zone viene segnata.
 enum GameOutcome { none, player1, player2 }
 
-/// Vite con cui si comincia la partita (anche dopo "Reset a 20").
+/// Vite con cui si comincia la partita la prima volta. La quantita' si sceglie
+/// dalla voce "Nuova partita" del menu e resta ricordata fra una partita e
+/// l'altra (vedi [_LifeCounterHomeState._startingLife]).
 const int kStartingLife = 20;
+
+/// Limiti della quantita' di vite scegliibile per una nuova partita.
+const int kMinStartingLife = 1;
+const int kMaxStartingLife = 999;
 
 /// Chiavi con cui la partita in corso (vite e colori delle due zone) viene
 /// ricordata fra un avvio e l'altro, ricaricamento della pagina compreso.
@@ -315,6 +353,10 @@ const String _kPlayer1LifeKey = 'player1Life';
 const String _kPlayer2LifeKey = 'player2Life';
 const String _kPlayer1ColorKey = 'player1Color';
 const String _kPlayer2ColorKey = 'player2Color';
+
+/// Vite con cui e' cominciata l'ultima nuova partita: la voce "Nuova partita"
+/// del menu si riapre su questa quantita'.
+const String _kStartingLifeKey = 'startingLife';
 
 /// Se in verticale la vita del primo giocatore e' girata dall'altra parte,
 /// cosi' i due numeri guardano in versi opposti (vedi [_twoZones]).
@@ -327,20 +369,40 @@ const String _kFlipFirstLifeKey = 'flipFirstLife';
 const String _kOpponentLifeVisibleKey = 'opponentLifeVisible';
 
 /// Impostazioni del timer di partita: se e' acceso, quanto dura e quanto tempo
-/// resta. Il tempo resta fermo quando l'app viene riaperta: a farlo ripartire
+/// resta. Il timer fermo resta fermo anche riaprendo l'app: a farlo ripartire
 /// e' un tocco sul suo box.
 const String _kTimerOnKey = 'timerOn';
 const String _kTimerMinutesKey = 'timerMinutes';
 const String _kTimerSecondsKey = 'timerSeconds';
 
+/// Istante (millisecondi dall'epoca) in cui il timer finira', scritto solo
+/// mentre scorre. E' un momento assoluto, non un tempo che resta: cosi' il conto
+/// si ricalcola dall'orologio e non si perde nemmeno se l'app viene chiusa.
+const String _kTimerDeadlineKey = 'timerDeadline';
+
 /// Trasforma un colore letto dalla memoria in un [Color]; `null` se non
 /// c'era niente da leggere.
 Color? _storedColor(int? value) => value == null ? null : Color(value);
 
+/// Durata dell'animazione con cui i tre pulsanti delle vite compaiono sopra la
+/// voce "Nuova partita" del menu. La usano sia il picker sia la sua copia
+/// invisibile: se i due tempi non fossero identici il menu si muoverebbe
+/// mentre i pulsanti crescono.
+const Duration _kLifePickerDuration = Duration(milliseconds: 180);
+
+/// Distanza della scelta delle vite dal bordo sinistro dello schermo quando il
+/// telefono e' in orizzontale (dove la scelta si stacca dal menu e va a
+/// sinistra).
+const double _kLifePickerInset = 18;
+
 class _LifeCounterHomeState extends State<LifeCounterHome>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   int player1Life = kStartingLife;
   int player2Life = kStartingLife;
+
+  /// Vite con cui si comincia una nuova partita: e' la quantita' scelta la
+  /// volta scorsa dal menu (all'inizio [kStartingLife]).
+  int _startingLife = kStartingLife;
 
   /// Colore di sfondo scelto da ciascun giocatore per la propria zona.
   Color _player1Color = kDefaultPanelColor;
@@ -363,6 +425,17 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     vsync: this,
     duration: const Duration(milliseconds: 260),
   );
+
+  /// True mentre si sta scegliendo con quante vite ricominciare: i tre valori
+  /// pronti compaiono sopra la voce "Nuova partita" del menu. Si spegne
+  /// scegliendo un valore o richiudendo il menu (vedi [closeMenu]).
+  bool _lifePickerOpen = false;
+
+  /// Versione del pacchetto installato, numero di build compreso ("1.0.0+1"):
+  /// e' quella che compare in fondo a sinistra col menu aperto. Resta vuota
+  /// finche' non e' stata letta, e dove non c'e' (sul web in sviluppo il file
+  /// della versione non viene generato) la scritta semplicemente non compare.
+  String _appVersion = '';
 
   static const int _diceSides = 20;
 
@@ -398,7 +471,9 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
 
   /// Momento in cui il timer finira': il tempo rimasto si ricalcola da qui a
   /// ogni tick, invece di sommarsi a mano, cosi' il conteggio non accumula
-  /// ritardo.
+  /// ritardo. Essendo un istante assoluto e' anche quello che si salva in
+  /// memoria, e da li' il tempo riparte giusto anche dopo che l'app e' stata
+  /// chiusa.
   DateTime? _timerDeadline;
 
   Timer? _timerTicker;
@@ -406,17 +481,38 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_restoreGame());
     unawaited(_keepScreenOn());
+    unawaited(_loadAppVersion());
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _rollTimer?.cancel();
     _timerTicker?.cancel();
     _menuController.dispose();
+    // Un allarme lasciato suonare dopo la chiusura della schermata (o dopo un
+    // hot restart) non lo ferma piu' nessuno.
+    unawaited(_stopTimerAlarm());
     unawaited(_releaseScreen());
     super.dispose();
+  }
+
+  /// Il timer conta sull'orologio, non sui tick: quando l'app non e' piu'
+  /// davanti il ticker si ferma (non serve a niente, e il sistema lo rallenta
+  /// comunque) ma la scadenza resta, e al ritorno il tempo si ricalcola da li'.
+  /// Cosi' il conto non si perde ne' mettendo l'app in secondo piano ne'
+  /// chiudendola.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _syncTimerWithClock();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      _timerTicker?.cancel();
+    }
   }
 
   /// Tiene acceso lo schermo finche' l'app e' davanti: fra un turno e l'altro si
@@ -436,6 +532,24 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     } catch (_) {}
   }
 
+  /// Legge la versione dell'app (quella scritta da `flutter build` nel
+  /// pacchetto, quindi anche il numero di build delle release) e la tiene da
+  /// parte per la scritta del menu. Se non si riesce a leggerla la scritta non
+  /// compare: e' un'informazione in piu', non deve dare errore.
+  Future<void> _loadAppVersion() async {
+    final String version;
+    try {
+      final info = await PackageInfo.fromPlatform();
+      final build = info.buildNumber.isEmpty ? '' : '+${info.buildNumber}';
+      version = '${info.version}$build';
+    } catch (_) {
+      return;
+    }
+    // Sul web, dove la versione vera non c'e', resta una stringa vuota.
+    if (version.isEmpty || !mounted) return;
+    setState(() => _appVersion = version);
+  }
+
   /// Rilegge la partita lasciata in sospeso: vite e colori delle due zone.
   /// Se non c'e' niente in memoria si parte da [kStartingLife] e dal colore
   /// predefinito. Se la memoria non e' disponibile non succede nulla: si
@@ -449,34 +563,61 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     }
     if (!mounted) return;
 
-    // Le impostazioni del timer si rileggono comunque: non fanno parte della
-    // partita, e il timer torna sempre fermo (a farlo partire e' un tocco).
+    // Le impostazioni del tavolo (timer, vite della nuova partita) si
+    // rileggono comunque: non fanno parte della partita in corso.
     final timerMinutes =
         (prefs.getInt(_kTimerMinutesKey) ?? kTimerDefaultMinutes).clamp(
           kTimerMinMinutes,
           kTimerMaxMinutes,
         );
     final timerSeconds = prefs.getInt(_kTimerSecondsKey);
+    final timerOn = prefs.getBool(_kTimerOnKey) ?? false;
+
+    // Il timer che stava scorrendo riprende da solo: il tempo che resta si
+    // ricava dalla scadenza salvata, che e' un istante assoluto. Se la scadenza
+    // e' passata mentre l'app era chiusa il tempo e' finito, ma senza suono:
+    // nessuno era li' a sentirlo.
+    final deadlineMillis = prefs.getInt(_kTimerDeadlineKey) ?? 0;
+    final now = DateTime.now();
+    final deadline = deadlineMillis > 0
+        ? DateTime.fromMillisecondsSinceEpoch(deadlineMillis)
+        : null;
+    final running = timerOn && deadline != null && deadline.isAfter(now);
+    final expired = timerOn && deadline != null && !running;
+
     setState(() {
       _timerMinutes = timerMinutes;
-      _timerOn = prefs.getBool(_kTimerOnKey) ?? false;
-      _timerRemaining = Duration(
-        seconds: (timerSeconds ?? timerMinutes * 60).clamp(
-          0,
-          timerMinutes * 60,
-        ),
+      _timerOn = timerOn;
+      _timerRemaining = running
+          ? deadline.difference(now)
+          : Duration(
+              seconds: expired
+                  ? 0
+                  : (timerSeconds ?? timerMinutes * 60).clamp(
+                      0,
+                      timerMinutes * 60,
+                    ),
+            );
+      _timerRunning = running;
+      _timerDeadline = running ? deadline : null;
+      _startingLife = (prefs.getInt(_kStartingLifeKey) ?? kStartingLife).clamp(
+        kMinStartingLife,
+        kMaxStartingLife,
       );
       _flipFirstLife = prefs.getBool(_kFlipFirstLifeKey) ?? false;
       _opponentLifeVisible = prefs.getBool(_kOpponentLifeVisibleKey) ?? true;
     });
+    if (running) {
+      _startTicker();
+    }
 
     if (_touched) return;
 
     final color1 = _storedColor(prefs.getInt(_kPlayer1ColorKey));
     final color2 = _storedColor(prefs.getInt(_kPlayer2ColorKey));
     setState(() {
-      player1Life = prefs.getInt(_kPlayer1LifeKey) ?? kStartingLife;
-      player2Life = prefs.getInt(_kPlayer2LifeKey) ?? kStartingLife;
+      player1Life = prefs.getInt(_kPlayer1LifeKey) ?? _startingLife;
+      player2Life = prefs.getInt(_kPlayer2LifeKey) ?? _startingLife;
       if (color1 != null) _player1Color = color1;
       if (color2 != null) _player2Color = color2;
     });
@@ -497,9 +638,15 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       await prefs.setBool(_kOpponentLifeVisibleKey, _opponentLifeVisible);
       await prefs.setBool(_kTimerOnKey, _timerOn);
       await prefs.setInt(_kTimerMinutesKey, _timerMinutes);
+      await prefs.setInt(_kStartingLifeKey, _startingLife);
       // Il tempo rimasto si scrive arrotondato al secondo: e' quello che si
       // legge nel box del timer.
       await prefs.setInt(_kTimerSecondsKey, _timerRemaining.inSeconds);
+      // La scadenza serve solo mentre il timer scorre (0 = fermo).
+      await prefs.setInt(
+        _kTimerDeadlineKey,
+        _timerDeadline?.millisecondsSinceEpoch ?? 0,
+      );
     } catch (_) {
       // Senza memoria la partita si gioca comunque, semplicemente non
       // viene ricordata.
@@ -517,18 +664,16 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     unawaited(_saveGame());
   }
 
-  /// Nuova partita: le due vite tornano a [kStartingLife] e il timer torna alla
-  /// durata scelta, **fermo**. Il tempo riparte solo toccando il box, perche' il
-  /// timer non parte mai da solo: azzerando le vite si aspetta il play.
-  void resetLife() {
+  /// Nuova partita: le due vite tornano a [life], la quantita' scelta dal menu
+  /// (che resta ricordata per le partite successive). Il timer non viene
+  /// toccato: si azzera solo dal suo box (long press) o dalle impostazioni.
+  void resetLife(int life) {
     _touched = true;
-    _timerTicker?.cancel();
+    final target = life.clamp(kMinStartingLife, kMaxStartingLife);
     setState(() {
-      player1Life = kStartingLife;
-      player2Life = kStartingLife;
-      _timerRunning = false;
-      _timerDeadline = null;
-      _timerRemaining = Duration(minutes: _timerMinutes);
+      _startingLife = target;
+      player1Life = target;
+      player2Life = target;
     });
     unawaited(_saveGame());
   }
@@ -640,7 +785,10 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   }
 
   void toggleMenu() {
-    setState(() => _menuOpen = !_menuOpen);
+    setState(() {
+      _menuOpen = !_menuOpen;
+      if (!_menuOpen) _lifePickerOpen = false;
+    });
     if (_menuOpen) {
       _menuController.forward();
     } else {
@@ -650,7 +798,12 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
 
   void closeMenu() {
     if (!_menuOpen) return;
-    setState(() => _menuOpen = false);
+    setState(() {
+      _menuOpen = false;
+      // La scelta delle vite vive appesa al menu: chiuso quello non ha piu'
+      // senso lasciarla in giro.
+      _lifePickerOpen = false;
+    });
     _menuController.reverse();
   }
 
@@ -683,6 +836,7 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   /// fermo: a farlo partire e' il tocco sul suo box.
   void setTimerOn(bool enabled) {
     _timerTicker?.cancel();
+    unawaited(_stopTimerAlarm());
     setState(() {
       _timerOn = enabled;
       _timerRunning = false;
@@ -696,6 +850,7 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   void setTimerMinutes(int minutes) {
     final clamped = minutes.clamp(kTimerMinMinutes, kTimerMaxMinutes);
     _timerTicker?.cancel();
+    unawaited(_stopTimerAlarm());
     setState(() {
       _timerMinutes = clamped;
       _timerRunning = false;
@@ -706,10 +861,10 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   }
 
   /// Riporta il timer alla durata scelta, fermo: e' quello che fanno la voce
-  /// del menu e il long press sul box del timer. Anche la nuova partita
-  /// ([resetLife]) fa la stessa cosa.
+  /// delle impostazioni del timer e il long press sul box del timer.
   void resetTimer() {
     _timerTicker?.cancel();
+    unawaited(_stopTimerAlarm());
     setState(() {
       _timerRunning = false;
       _timerDeadline = null;
@@ -724,6 +879,9 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   /// finito un tocco lo fa ripartire da capo.
   void toggleTimer() {
     if (!_timerOn) return;
+    // Toccare il timer zittisce l'avviso di fine tempo: il tempo e' stato
+    // rimesso in gioco (o fermato) e l'allarme non serve piu'.
+    unawaited(_stopTimerAlarm());
     if (_timerRunning) {
       _pauseTimer();
       return;
@@ -732,12 +890,44 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       _timerRemaining = Duration(minutes: _timerMinutes);
     }
     _timerDeadline = DateTime.now().add(_timerRemaining);
+    _startTicker();
+    setState(() => _timerRunning = true);
+    unawaited(_saveGame());
+  }
+
+  /// Fa scorrere il tempo rimasto verso lo zero: un tick ogni 200 ms, ma la
+  /// schermata si ridisegna solo quando cambia il secondo scritto nel box.
+  void _startTicker() {
     _timerTicker?.cancel();
     _timerTicker = Timer.periodic(
       const Duration(milliseconds: 200),
       (_) => _tickTimer(),
     );
-    setState(() => _timerRunning = true);
+  }
+
+  /// Rimette il tempo rimasto in pari con l'orologio. Serve al ritorno in primo
+  /// piano, quando il ticker era fermo: o la scadenza e' ancora la' e il timer
+  /// riprende a scorrere, oppure e' passata mentre l'app era via e il tempo e'
+  /// finito senza suono, perche' non c'era nessuno a sentirlo.
+  void _syncTimerWithClock() {
+    final deadline = _timerDeadline;
+    if (deadline == null) return;
+
+    final left = deadline.difference(DateTime.now());
+    if (left > Duration.zero) {
+      setState(() {
+        _timerRemaining = left;
+        _timerRunning = true;
+      });
+      _startTicker();
+      return;
+    }
+
+    setState(() {
+      _timerRemaining = Duration.zero;
+      _timerRunning = false;
+      _timerDeadline = null;
+    });
     unawaited(_saveGame());
   }
 
@@ -775,8 +965,10 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       _timerRunning = false;
       _timerDeadline = null;
     });
-    // Il tempo finito si sente anche senza guardare lo schermo.
+    // Il tempo finito si sente anche senza guardare lo schermo: la vibrazione
+    // piu' forte e la sveglia di sistema, sul canale delle sveglie.
     unawaited(HapticFeedback.heavyImpact());
+    unawaited(_playTimerAlarm());
     unawaited(_saveGame());
   }
 
@@ -794,14 +986,27 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     );
   }
 
+  /// Mostra o nasconde la scelta delle vite con cui ricominciare: i tre valori
+  /// pronti compaiono sopra la voce "Nuova partita", dentro al menu aperto
+  /// (per questo la voce non lo chiude, al contrario delle altre).
+  void toggleLifePresetPicker() {
+    setState(() => _lifePickerOpen = !_lifePickerOpen);
+  }
+
+  /// Fa ripartire la partita con le vite scelte: azzera i contatori e richiude
+  /// la scelta e il menu, cosi' le nuove vite si vedono subito.
+  void startNewGame(int life) {
+    resetLife(life);
+    setState(() => _lifePickerOpen = false);
+    closeMenu();
+  }
+
   List<RadialMenuItem> _buildMenuItems() {
     return [
       RadialMenuItem(
         icon: Icons.refresh,
-        tooltip: _timerOn
-            ? 'Nuova partita: vite a 20, timer da capo'
-            : 'Reset a 20',
-        onTap: () => runMenuAction(resetLife),
+        tooltip: 'Nuova partita: $_startingLife vite',
+        onTap: toggleLifePresetPicker,
       ),
       RadialMenuItem(
         icon: Icons.casino,
@@ -1052,24 +1257,121 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
                 // (così non modificano le vite) ma non chiude il menu.
                 // Per chiudere si usa solo la X al centro.
                 child: AbsorbPointer(
-                  child: Container(color: Colors.black.withOpacity(0.55)),
+                  child: Container(color: Colors.black.withOpacity(0.82)),
                 ),
               ),
-            // Mentre si sceglie un colore il menu centrale sparisce del
-            // tutto: non è né visibile né utilizzabile.
-            if (!_paletteOpen)
-              Center(
-                child: RadialMenu(
+            ..._buildMenuOverlay(),
+            // Versione dell'app, in fondo a sinistra: e' l'ultima cosa dello
+            // Stack, quindi sta sopra il velo scuro del menu. Compare e
+            // sparisce con le voci, cosi' mentre si gioca il pannello resta
+            // pulito.
+            if (_appVersion.isNotEmpty)
+              Positioned(
+                left: 0,
+                bottom: 0,
+                child: _AppVersionLabel(
+                  version: _appVersion,
                   animation: _menuController,
-                  open: _menuOpen,
-                  items: _buildMenuItems(),
-                  onToggle: toggleMenu,
                 ),
               ),
           ],
         ],
       ),
     );
+  }
+
+  /// Il menu radiale e la scelta delle vite, che vive appesa alla sua voce
+  /// "Nuova partita".
+  ///
+  /// In verticale i tre pulsanti stanno **sopra** il menu e una copia
+  /// invisibile, sotto il menu, tiene il gruppo simmetrico rispetto al suo
+  /// centro: cosi' il menu non si sposta di un pixel quando i pulsanti
+  /// compaiono. In orizzontale l'altezza e' poca (411 px sul S24) e il gruppo
+  /// rimpicciolirebbe il menu: la scelta si stacca e si mette a sinistra, dove
+  /// c'e' spazio libero, e il menu resta al centro a misura piena.
+  List<Widget> _buildMenuOverlay() {
+    // Mentre si sceglie un colore il menu centrale sparisce del tutto: non e'
+    // ne' visibile ne' utilizzabile.
+    if (_paletteOpen) return const [];
+
+    final menu = RadialMenu(
+      animation: _menuController,
+      open: _menuOpen,
+      items: _buildMenuItems(),
+      onToggle: toggleMenu,
+    );
+
+    if (_isWide(context)) {
+      return [
+        Center(child: menu),
+        // La scelta si stacca dal menu e va a sinistra, dove c'e' spazio
+        // libero. Nessun fondo: e' la stessa scelta nuda che in verticale sta
+        // sopra la voce "Nuova partita", appoggiata al velo scuro.
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Padding(
+            padding: EdgeInsets.only(
+              left: MediaQuery.paddingOf(context).left + _kLifePickerInset,
+            ),
+            child: AnimatedSize(
+              duration: _kLifePickerDuration,
+              curve: Curves.easeOutCubic,
+              // Cresce verso destra, allontanandosi dal bordo.
+              alignment: Alignment.centerLeft,
+              child: _lifePickerOpen
+                  ? _LifePresetPicker(
+                      life: _startingLife,
+                      onSelected: startNewGame,
+                      bottomGap: 0,
+                    )
+                  : const SizedBox.shrink(),
+            ),
+          ),
+        ),
+      ];
+    }
+
+    final picker = _LifePresetPicker(
+      life: _startingLife,
+      onSelected: startNewGame,
+    );
+
+    return [
+      Center(
+        // Un filo di margine perche' il gruppo arriva vicino all'altezza dello
+        // schermo.
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AnimatedSize(
+                  duration: _kLifePickerDuration,
+                  curve: Curves.easeOutCubic,
+                  // Cresce verso l'alto, staccandosi dal menu: e' cosi' che
+                  // compare, appesa alla sua voce.
+                  alignment: Alignment.bottomCenter,
+                  child: _lifePickerOpen ? picker : const SizedBox.shrink(),
+                ),
+                menu,
+                AnimatedSize(
+                  duration: _kLifePickerDuration,
+                  curve: Curves.easeOutCubic,
+                  alignment: Alignment.topCenter,
+                  // Solo il posto occupato dalla scelta, senza disegnarla e
+                  // senza lasciarla toccare.
+                  child: _lifePickerOpen
+                      ? IgnorePointer(child: Opacity(opacity: 0, child: picker))
+                      : const SizedBox.shrink(),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ];
   }
 }
 
@@ -1262,6 +1564,52 @@ class RadialMenu extends StatelessWidget {
             foreground: _MenuIconButton.hexagonForeground,
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Versione dell'app, scritta piccola in fondo a sinistra mentre il menu e'
+/// aperto.
+///
+/// Serve a sapere quale build sta girando: gli APK della release si chiamano
+/// come la versione, ma una volta installati non lo dicono piu'. Compare e
+/// sparisce con le voci del menu ([animation] e' la stessa) e non prende i
+/// tocchi, cosi' non cambia niente di quello che c'e' sotto.
+class _AppVersionLabel extends StatelessWidget {
+  final String version;
+  final Animation<double> animation;
+
+  const _AppVersionLabel({required this.version, required this.animation});
+
+  /// Distanza dal bordo dello schermo (o dalle barre di sistema) e misura del
+  /// testo: piccola, ma con peso e spaziatura che la tengono leggibile.
+  static const double _inset = 16;
+  static const double _fontSize = 13;
+
+  @override
+  Widget build(BuildContext context) {
+    final insets = MediaQuery.paddingOf(context);
+    return IgnorePointer(
+      child: AnimatedBuilder(
+        animation: animation,
+        builder: (context, child) =>
+            Opacity(opacity: animation.value, child: child),
+        child: Padding(
+          padding: EdgeInsets.only(
+            left: insets.left + _inset,
+            bottom: insets.bottom + _inset,
+          ),
+          child: Text(
+            'v$version',
+            style: appTextStyle(
+              fontSize: _fontSize,
+              weight: 700,
+              letterSpacing: 1.2,
+              color: Colors.white70,
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -2650,8 +2998,8 @@ class _TimerSetupDialogState extends State<_TimerSetupDialog> {
               runSpacing: 8,
               children: [
                 for (final preset in _presets)
-                  _TimerPresetButton(
-                    minutes: preset,
+                  _PresetButton(
+                    label: '$preset',
                     selected: _minutes == preset,
                     onTap: () => _setMinutes(preset),
                   ),
@@ -2679,17 +3027,18 @@ class _TimerSetupDialogState extends State<_TimerSetupDialog> {
   }
 }
 
-/// Durata pronta del timer: il numero di minuti su un pulsante tondo.
+/// Valore pronto su un pulsante tondo: lo usano le durate del timer e le vite
+/// della nuova partita.
 ///
-/// Quella scelta e' bianca piena, come il pulsante principale del menu: si
-/// legge subito quale durata e' impostata.
-class _TimerPresetButton extends StatelessWidget {
-  final int minutes;
+/// Quello scelto e' bianco pieno, come il pulsante principale del menu: si
+/// legge subito quale valore e' impostato.
+class _PresetButton extends StatelessWidget {
+  final String label;
   final bool selected;
   final VoidCallback onTap;
 
-  const _TimerPresetButton({
-    required this.minutes,
+  const _PresetButton({
+    required this.label,
     required this.selected,
     required this.onTap,
   });
@@ -2706,13 +3055,77 @@ class _TimerPresetButton extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
         ),
         child: Text(
-          '$minutes',
+          label,
           style: appTextStyle(
             fontSize: 16,
             weight: 700,
             color: selected ? Colors.black : Colors.white,
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Scelta delle vite con cui cominciare una nuova partita: i tre valori pronti
+/// che compaiono sopra la voce "Nuova partita" del menu.
+///
+/// Non e' una finestra a parte perche' la scelta e' di un tocco solo: si tocca
+/// la quantita' e la partita riparte. Il valore in uso e' quello bianco pieno,
+/// come nei preset del timer. La quantita' scelta resta ricordata (vedi
+/// [_LifeCounterHomeState._startingLife]), cosi' la volta dopo e' ancora
+/// quella.
+class _LifePresetPicker extends StatelessWidget {
+  /// Vite pronte: sono quelle dei formati che si giocano di solito (partita
+  /// normale, due contro due, Commander), cosi' quasi sempre basta un tocco.
+  static const List<int> _presets = [20, 30, 40];
+
+  final int life;
+  final ValueChanged<int> onSelected;
+
+  /// Stacco dalla voce del menu che sta appena sotto: serve solo quando il
+  /// pulsante sta attaccato al menu (in verticale), non quando e' un pannellino
+  /// a se' (in orizzontale).
+  final double bottomGap;
+
+  const _LifePresetPicker({
+    required this.life,
+    required this.onSelected,
+    this.bottomGap = 14,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottomGap),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'Seleziona i Punti Vita iniziali',
+            style: appTextStyle(
+              fontSize: 15,
+              weight: 700,
+              color: Colors.white70,
+              letterSpacing: 1.2,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final preset in _presets)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 5),
+                  child: _PresetButton(
+                    label: '$preset',
+                    selected: life == preset,
+                    onTap: () => onSelected(preset),
+                  ),
+                ),
+            ],
+          ),
+        ],
       ),
     );
   }
