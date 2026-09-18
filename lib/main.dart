@@ -473,11 +473,18 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     unawaited(_saveGame());
   }
 
+  /// Nuova partita: le due vite tornano a [kStartingLife] e il timer torna alla
+  /// durata scelta, **fermo**. Il tempo riparte solo toccando il box, perche' il
+  /// timer non parte mai da solo: azzerando le vite si aspetta il play.
   void resetLife() {
     _touched = true;
+    _timerTicker?.cancel();
     setState(() {
       player1Life = kStartingLife;
       player2Life = kStartingLife;
+      _timerRunning = false;
+      _timerDeadline = null;
+      _timerRemaining = Duration(minutes: _timerMinutes);
     });
     unawaited(_saveGame());
   }
@@ -608,10 +615,11 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     closeMenu();
   }
 
-  /// Gira la vita del primo giocatore: le due zone restano una sopra l'altra,
-  /// ma i numeri guardano in versi opposti, cosi' ognuno dei due giocatori
-  /// legge il proprio contatore dal proprio lato del telefono. Ha senso solo
-  /// con il telefono in verticale, quindi in orizzontale non cambia niente.
+  /// Gira la vita del primo giocatore: le due zone restano dove sono, ma i
+  /// numeri guardano in versi opposti, cosi' ognuno dei due giocatori legge il
+  /// proprio contatore dal proprio lato del tavolo. Vale in tutti e due gli
+  /// orientamenti: col telefono in verticale gira la zona in alto, in
+  /// orizzontale quella di sinistra (vedi [_twoZones]).
   void toggleFlipFirstLife() {
     setState(() => _flipFirstLife = !_flipFirstLife);
     unawaited(_saveGame());
@@ -643,7 +651,9 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     unawaited(_saveGame());
   }
 
-  /// Riporta il timer alla durata scelta, fermo.
+  /// Riporta il timer alla durata scelta, fermo: e' quello che fanno la voce
+  /// del menu e il long press sul box del timer. Anche la nuova partita
+  /// ([resetLife]) fa la stessa cosa.
   void resetTimer() {
     _timerTicker?.cancel();
     setState(() {
@@ -651,6 +661,8 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       _timerDeadline = null;
       _timerRemaining = Duration(minutes: _timerMinutes);
     });
+    // Il long press non ha nessun altro segno che sia andato a buon fine.
+    unawaited(HapticFeedback.mediumImpact());
     unawaited(_saveGame());
   }
 
@@ -732,7 +744,9 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     return [
       RadialMenuItem(
         icon: Icons.refresh,
-        tooltip: 'Reset a 20',
+        tooltip: _timerOn
+            ? 'Nuova partita: vite a 20, timer da capo'
+            : 'Reset a 20',
         onTap: () => runMenuAction(resetLife),
       ),
       RadialMenuItem(
@@ -740,16 +754,15 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
         tooltip: 'Chi inizia? (dado)',
         onTap: () => runMenuAction(rollForFirstPlayer),
       ),
-      // Il verso della vita si sceglie solo con il telefono in verticale:
-      // in orizzontale la voce non serve e non viene mostrata.
-      if (!_isWide(context))
-        RadialMenuItem(
-          icon: Icons.flip,
-          tooltip: _flipFirstLife
-              ? 'Vita del giocatore 1 normale'
-              : 'Gira la vita del giocatore 1',
-          onTap: () => runMenuAction(toggleFlipFirstLife),
-        ),
+      // Il verso della vita si sceglie in tutti e due gli orientamenti: in
+      // verticale gira la zona in alto, in orizzontale quella di sinistra.
+      RadialMenuItem(
+        icon: Icons.flip,
+        tooltip: _flipFirstLife
+            ? 'Vita del giocatore 1 normale'
+            : 'Gira la vita del giocatore 1',
+        onTap: () => runMenuAction(toggleFlipFirstLife),
+      ),
       RadialMenuItem(
         icon: Icons.timer,
         tooltip: 'Timer di partita',
@@ -779,13 +792,15 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   /// dell'app. Nessuna zona e' ruotata per conto suo, altrimenti girando il
   /// telefono i numeri resterebbero inclinati come prima. Se la vita del primo
   /// giocatore e' girata la sua zona ruota di mezzo giro, cosi' la legge dritta
-  /// il giocatore seduto dall'altra parte del tavolo.
+  /// il giocatore seduto dall'altra parte del tavolo: vale in tutti e due gli
+  /// orientamenti (in verticale la zona girata e' quella in alto, in
+  /// orizzontale quella di sinistra).
   Widget _twoZones({
     required bool wide,
     required Widget first,
     required Widget second,
   }) {
-    final flipFirst = !wide && _flipFirstLife;
+    final flipFirst = _flipFirstLife;
     final zones = <Widget>[
       Expanded(
         child: RotatedBox(quarterTurns: flipFirst ? 2 : 0, child: first),
@@ -800,21 +815,25 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   /// Ogni zona mostra il contatore oppure la tavolozza dei colori.
   ///
   /// Se il timer e' acceso compare anche il suo box, ruotato come le cifre
-  /// della zona che lo legge:
+  /// della zona che lo legge. Finche' le due vite guardano nello stesso verso
+  /// ne basta uno solo (un numero dritto si legge da tutte e due le parti del
+  /// tavolo); quando la vita del primo giocatore e' girata ne servono due, uno
+  /// per giocatore, con lo stesso tempo:
   ///
   /// * in verticale, con le due vite nello stesso verso, un timer solo in cima
   ///   alla schermata;
-  /// * in verticale, con la vita del primo giocatore girata, due timer con lo
-  ///   stesso tempo (in cima e in fondo), ognuno nel verso del giocatore che
-  ///   deve leggerlo;
-  /// * in orizzontale, un timer solo in cima e centrato.
+  /// * in verticale, con la vita del primo giocatore girata, due timer (in cima
+  ///   e in fondo), ognuno davanti a chi deve leggerlo;
+  /// * in orizzontale, un timer solo in cima e centrato oppure, con la vita del
+  ///   primo giocatore girata, due timer in cima alla meta' di sinistra e a
+  ///   quella di destra.
   ///
   /// Il box fluttua sopra le zone: non toglie spazio al contatore, che resta
   /// grande come quando il timer e' spento.
   Widget _buildLifeView() {
     final outcome = _gameOutcome;
     final wide = _isWide(context);
-    final flipped = !wide && _flipFirstLife;
+    final flipped = _flipFirstLife;
 
     final zones = _twoZones(
       wide: wide,
@@ -849,19 +868,36 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     // Il box sta sopra la zona, non accanto: accendere il timer non cambia di
     // un pixel il contatore delle vite. Il verso e' quello delle cifre che gli
     // stanno sotto, e ne serve uno per giocatore solo quando le due vite
-    // guardano in versi opposti (cioe' in verticale con la vita girata).
+    // guardano in versi opposti (cioe' con la vita del primo giocatore girata).
     Widget timer(int quarterTurns) => GameTimerBox(
       remaining: _timerRemaining,
       running: _timerRunning,
       quarterTurns: quarterTurns,
       onTap: toggleTimer,
+      onLongPress: resetTimer,
     );
+
+    // I due box seguono le zone che li leggono: col telefono in verticale le
+    // zone sono una sopra l'altra, quindi il primo box sta in cima e il secondo
+    // (quando c'e') in fondo; in orizzontale sono affiancate, quindi il primo
+    // sta in cima alla meta' di sinistra (giocatore 1) e il secondo a quella di
+    // destra.
+    final firstAlignment = wide && flipped
+        ? const Alignment(-0.5, -1)
+        : Alignment.topCenter;
+    final secondAlignment = wide
+        ? const Alignment(0.5, -1)
+        : Alignment.bottomCenter;
 
     return Stack(
       children: [
         Positioned.fill(child: zones),
-        _FloatingTimer(atBottom: false, child: timer(flipped ? 2 : 0)),
-        if (flipped) _FloatingTimer(atBottom: true, child: timer(0)),
+        _FloatingTimer(
+          alignment: firstAlignment,
+          child: timer(flipped ? 2 : 0),
+        ),
+        if (flipped)
+          _FloatingTimer(alignment: secondAlignment, child: timer(0)),
       ],
     );
   }
@@ -2115,23 +2151,31 @@ String _formatTime(Duration remaining) {
 /// tempo e' finito la pillola diventa ambra, che e' il segnale di turno
 /// scaduto.
 ///
-/// La pillola e' ruotata dello stesso quarto di giro delle cifre della zona a
-/// cui appartiene: chi legge la vita legge anche il timer nel suo verso.
+/// Tenendola premuta il tempo torna da capo e il timer si ferma: e' il modo per
+/// ricominciare il turno senza passare dal menu. Non e' un tocco, quindi non
+/// puo' succedere per sbaglio mentre si mette in pausa.
+///
+/// La pillola e' ruotata come le cifre della zona a cui appartiene: chi legge
+/// la vita legge anche il timer nel suo verso.
 class GameTimerBox extends StatelessWidget {
   final Duration remaining;
   final bool running;
 
-  /// Quarti di giro della rotazione: 0 in orizzontale, 1 come le zone col
-  /// telefono in verticale, 3 per la zona girata.
+  /// Quarti di giro della rotazione: 0 per la zona dritta, 2 per la zona
+  /// girata (mezzo giro).
   final int quarterTurns;
 
   final VoidCallback onTap;
+
+  /// Tenere premuto: riporta il tempo da capo e fermo.
+  final VoidCallback onLongPress;
 
   const GameTimerBox({
     super.key,
     required this.remaining,
     required this.running,
     required this.onTap,
+    required this.onLongPress,
     this.quarterTurns = 0,
   });
 
@@ -2164,11 +2208,14 @@ class GameTimerBox extends StatelessWidget {
       quarterTurns: quarterTurns,
       child: Tooltip(
         message: expired
-            ? 'Tempo scaduto'
-            : (running ? 'Ferma il timer' : 'Fai partire il timer'),
+            ? 'Tempo scaduto: tocca per ripartire, tieni premuto per azzerare'
+            : (running
+                  ? 'Ferma il timer (tieni premuto per azzerare)'
+                  : 'Fai partire il timer (tieni premuto per azzerare)'),
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: onTap,
+          onLongPress: onLongPress,
           child: Container(
             width: kTimerBoxWidth,
             height: kTimerBoxHeight,
@@ -2220,12 +2267,14 @@ class GameTimerBox extends StatelessWidget {
 /// spazio, quindi accendere il timer non rimpicciolisce il contatore. Tutto
 /// intorno al box la zona risponde come sempre: i tocchi li prende solo il box.
 class _FloatingTimer extends StatelessWidget {
-  /// True per il box in fondo alla schermata, false per quello in cima.
-  final bool atBottom;
+  /// Dove appoggiare il box: in cima o in fondo alla schermata, centrato
+  /// oppure sopra meta' schermata (col telefono in orizzontale le due zone sono
+  /// affiancate, quindi ogni zona ha il suo box in cima alla propria meta').
+  final Alignment alignment;
 
   final Widget child;
 
-  const _FloatingTimer({required this.atBottom, required this.child});
+  const _FloatingTimer({required this.alignment, required this.child});
 
   /// Distanza fra il box e il bordo dello schermo, o la barra di sistema
   /// quando il box sta in fondo.
@@ -2234,12 +2283,13 @@ class _FloatingTimer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final insets = MediaQuery.paddingOf(context);
+    final atTop = alignment.y < 0;
     return Align(
-      alignment: atBottom ? Alignment.bottomCenter : Alignment.topCenter,
+      alignment: alignment,
       child: Padding(
         padding: EdgeInsets.only(
-          top: atBottom ? 0 : insets.top + _gap,
-          bottom: atBottom ? insets.bottom + _gap : 0,
+          top: atTop ? insets.top + _gap : 0,
+          bottom: atTop ? 0 : insets.bottom + _gap,
         ),
         child: child,
       ),
