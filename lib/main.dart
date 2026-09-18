@@ -143,6 +143,36 @@ const Duration kComboWindow = Duration(milliseconds: 900);
 /// allineamento e linea di base: resta esattamente dove stava il segno.
 const double kComboScale = 0.8;
 
+/// Dimensione del valore di vita dell'avversario, scritto accanto al contatore.
+///
+/// Serve quando le due vite guardano in versi opposti (visualizzazione girata):
+/// ognuno vede il numero dell'altro capovolto, quindi vicino al proprio numero ne
+/// trova il valore. E' un'informazione di contorno, come i segni "-" e "+".
+const double kOpponentLifeFontSize = kNumberFontSize * 0.3;
+
+/// Di quanto la scritta va spostata, sopra o sotto la vita, per stare vicino
+/// alle cifre.
+///
+/// La scritta e' fuori dal layout (vedi [_OpponentLife]), quindi la distanza
+/// dalle cifre si sceglie a mano. Le cifre stanno sedute sulla linea di base e
+/// intorno a loro c'e' tutto il vuoto del font, che e' diverso sopra e sotto:
+/// una scritta appoggiata subito fuori dalla riga cadrebbe decine di px (di
+/// progetto) staccata dal numero. Le misure si ricavano dalle metriche di Medula
+/// One (ascendente 0,846, discendente 0,162, altezza delle cifre 0,605) e da uno
+/// stacco di 19,3 px fra i due inchiostri, uguale nei due casi:
+///
+/// * scritta sopra la vita: discendente della scritta 0,162 x 90 = 14,6, vuoto
+///   sopra le cifre (0,846 - 0,605) x 300 = 72,3 -> 14,6 + 72,3 - 19,3 = 67,6,
+///   ossia 0,225 x 300;
+/// * scritta sotto la vita: discendente delle cifre 0,162 x 300 = 48,6, vuoto
+///   sopra la scritta (0,846 - 0,605) x 90 = 21,7 -> 48,6 + 21,7 - 19,3 = 51,
+///   ossia 0,17 x 300.
+///
+/// Valgono per le vite fino a tre cifre, che sono le uniche che lasciano la riga
+/// alta come una riga intera di [kNumberFontSize].
+const double kOpponentLifeDrop = kNumberFontSize * 0.225;
+const double kOpponentLifeRise = kNumberFontSize * 0.17;
+
 /// Lunghezza del box del timer, prima di essere ruotato.
 ///
 /// Il timer si legge nel verso delle cifre della zona a cui appartiene, quindi
@@ -848,6 +878,13 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
         onColorSelected: (color) => setPlayerColor(1, color),
         winner: outcome == GameOutcome.player1,
         defeated: outcome == GameOutcome.player2,
+        // Con la visualizzazione girata le due vite guardano in versi opposti:
+        // ognuno legge la propria, quindi accanto c'e' quella dell'altro.
+        opponentLife: flipped ? player2Life : null,
+        // La zona e' ruotata di mezzo giro, quindi per lei "sopra la vita" e'
+        // il bordo interno dello schermo: il timer di questa zona e' sempre sul
+        // bordo esterno (in cima), e li' non ci sono sovrapposizioni.
+        opponentLifeAbove: true,
       ),
       second: PlayerZone(
         life: player2Life,
@@ -860,6 +897,12 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
         onColorSelected: (color) => setPlayerColor(2, color),
         winner: outcome == GameOutcome.player2,
         defeated: outcome == GameOutcome.player1,
+        opponentLife: flipped ? player1Life : null,
+        // Questa zona non e' ruotata, quindi "sopra la vita" e' il bordo in
+        // cima allo schermo: va bene col telefono in verticale, dove il suo
+        // timer sta in fondo, ma non in orizzontale, dove il timer sale in
+        // cima alla sua meta' e coprirebbe la scritta. Li' la scritta va sotto.
+        opponentLifeAbove: !wide,
       ),
     );
 
@@ -1400,6 +1443,16 @@ class PlayerZone extends StatelessWidget {
   /// True se questo giocatore e' a zero mentre l'altro e' ancora in gioco.
   final bool defeated;
 
+  /// Vita dell'avversario, scritta sopra o sotto il contatore. Si usa solo con
+  /// la visualizzazione girata, quando le due vite guardano in versi opposti:
+  /// cosi' ognuno legge il numero dell'altro senza doverlo capovolgere. Null = la
+  /// scritta non compare.
+  final int? opponentLife;
+
+  /// True se la scritta va sopra la vita, false se va sotto. Si sceglie il lato
+  /// libero dal timer, che nella zona fluttua sul bordo esterno dello schermo.
+  final bool opponentLifeAbove;
+
   /// Direzione dello swipe che ha aperto la tavolozza (+1 verso il basso,
   /// -1 verso l'alto): determina da che parte scorre la "scheda".
   final int openDirection;
@@ -1419,6 +1472,8 @@ class PlayerZone extends StatelessWidget {
     required this.onColorSelected,
     this.winner = false,
     this.defeated = false,
+    this.opponentLife,
+    this.opponentLifeAbove = true,
   });
 
   /// Velocita' minima (px/s) perche' uno swipe venga considerato tale.
@@ -1491,6 +1546,8 @@ class PlayerZone extends StatelessWidget {
                             onDecrease: onDecrease,
                             winner: winner,
                             defeated: defeated,
+                            opponentLife: opponentLife,
+                            opponentLifeAbove: opponentLifeAbove,
                           ),
                         ),
                         if (paletteVisible && !cardGoesDown)
@@ -1760,6 +1817,14 @@ class LifeCounterPanelTouch extends StatefulWidget {
   /// True se questo giocatore e' a zero mentre l'altro e' ancora in gioco.
   final bool defeated;
 
+  /// Vita dell'avversario, da scrivere accanto al contatore: si usa solo quando
+  /// la visualizzazione e' girata (vedi [PlayerZone.opponentLife]). Null = la
+  /// scritta non compare.
+  final int? opponentLife;
+
+  /// True se la scritta va sopra la vita, false se va sotto.
+  final bool opponentLifeAbove;
+
   const LifeCounterPanelTouch({
     super.key,
     required this.life,
@@ -1767,6 +1832,8 @@ class LifeCounterPanelTouch extends StatefulWidget {
     required this.onDecrease,
     this.winner = false,
     this.defeated = false,
+    this.opponentLife,
+    this.opponentLifeAbove = true,
   });
 
   /// Colore dei segni "-" e "+": come il numero (bianco) ma con opacita'
@@ -1904,6 +1971,9 @@ class _LifeCounterPanelTouchState extends State<LifeCounterPanelTouch> {
           : null,
     );
     final decided = widget.winner || widget.defeated;
+    // A partita decisa non c'e' posto per la vita dell'avversario: li' va il
+    // cartello di chi ha vinto e di chi ha perso.
+    final opponentLife = decided ? null : widget.opponentLife;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1968,6 +2038,14 @@ class _LifeCounterPanelTouchState extends State<LifeCounterPanelTouch> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        // La vita dell'avversario e' disegnata fuori dal layout,
+                        // quindi il suo posto nella colonna decide solo da che
+                        // parte esce: prima della riga sale, dopo scende. In
+                        // nessuno dei due casi sposta il contatore o lo fa
+                        // rimpicciolire. Il lato lo sceglie chi costruisce la
+                        // zona, in modo che non finisca sotto al timer.
+                        if (opponentLife != null && widget.opponentLifeAbove)
+                          _OpponentLife(life: opponentLife, above: true),
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -2002,6 +2080,8 @@ class _LifeCounterPanelTouchState extends State<LifeCounterPanelTouch> {
                             ),
                           ],
                         ),
+                        if (opponentLife != null && !widget.opponentLifeAbove)
+                          _OpponentLife(life: opponentLife, above: false),
                         // Il cartello sta nella stessa riga ridimensionata del
                         // contatore: cosi' entra sempre nel pannello, e siccome
                         // la zona e' ruotata ogni giocatore lo legge dritto
@@ -2127,6 +2207,54 @@ class _SignWithCombo extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// Vita dell'avversario, scritta sopra o sotto il contatore quando le due vite
+/// guardano in versi opposti (visualizzazione girata).
+///
+/// E' **fuori dal layout**: la scatola che la contiene e' di misura zero, quindi
+/// la scritta non occupa spazio e il contatore resta centrato e della stessa
+/// dimensione di quando la scritta non c'e'. [OverflowBox] la fa uscire sopra o
+/// sotto la riga, e [kOpponentLifeDrop] / [kOpponentLifeRise] la riportano
+/// vicino alle cifre, perche' intorno a loro c'e' tutto il vuoto del font.
+class _OpponentLife extends StatelessWidget {
+  final int life;
+
+  /// True se la scritta sale sopra la vita, false se scende sotto.
+  final bool above;
+
+  const _OpponentLife({required this.life, required this.above});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 0,
+      height: 0,
+      child: OverflowBox(
+        maxWidth: double.infinity,
+        maxHeight: double.infinity,
+        // La scatola di misura zero e' un pezzo della colonna del contatore:
+        // giace sul bordo della riga da cui la scritta esce, quindi si aggancia
+        // con il bordo inferiore quando sale e con quello superiore quando
+        // scende.
+        alignment: above ? Alignment.bottomCenter : Alignment.topCenter,
+        child: Transform.translate(
+          offset: Offset(0, above ? kOpponentLifeDrop : -kOpponentLifeRise),
+          child: Text(
+            '$life',
+            maxLines: 1,
+            softWrap: false,
+            // Grigio come i segni "-" e "+": la vita dell'avversario si legge
+            // senza rubare attenzione alla propria.
+            style: appNumberStyle(
+              fontSize: kOpponentLifeFontSize,
+              color: LifeCounterPanelTouch._signColor,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
