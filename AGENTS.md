@@ -26,11 +26,16 @@ flutter analyze lib             # validazione statica (baseline: 12 info, 0 erro
 dart format lib                 # formattazione (usare questo, non editare a mano)
 flutter run -d RFCWC0VE01P      # telefono: Galaxy S24 (SM S921B), Android 16 / API 36
 flutter build apk --release     # APK in build\app\outputs\flutter-apk\
-flutter install -d RFCWC0VE01P  # installa l'APK compilato sul telefono
+adb install -r build\app\outputs\flutter-apk\app-release.apk   # aggiorna l'APK sul telefono
 ```
 
 Per l'APK: la `release` e' firmata **con la debug key** (`android/app/build.gradle.kts`), quindi
 si installa per sideload ma non si pubblica. Va bene cosi': e' un'app personale.
+
+Per installare usare `adb install -r`, **non** `flutter install`: quest'ultimo disinstalla prima,
+e con l'app se ne va il salvataggio delle vite (i dati stanno nella cartella privata dell'app).
+`-r` lascia la cartella intatta e la sostituzione riesce perche' la firma (debug key) non cambia
+fra una build e l'altra.
 
 ## Regole operative
 
@@ -145,6 +150,9 @@ i due comandi; non si editano i PNG.
 - **GitHub esegue il workflow che sta nel commit spinto**: se il file non c'e' sul ramo o sul
   commit taggato, la pipeline non parte. Un tag su `develop` funziona (il file e' li'), un push
   su `main` funziona solo quando `main` conterra' davvero il codice.
+- L'APK esce come `MTG-Life-Counter-<versione>-build<numero>.apk` (non `app-release.apk`):
+  ci pensa lo step `Prepara l'artefatto`, che rinomina la copia in `dist/`. Il numero di build
+  serve perche' due run sulla stessa versione restino due file distinti.
 - Versione: da `v1.2.3` diventa `1.2.3`, altrimenti si legge il `version:` di `pubspec.yaml`;
   il numero di build e' sempre `GITHUB_RUN_NUMBER`, passato a `--build-number` (quindi ogni APK
   ha un `versionCode` diverso anche se pubspec non cambia).

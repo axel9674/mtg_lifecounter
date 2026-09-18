@@ -66,6 +66,7 @@ jobs:
           fi
           echo "nome=$nome" >> "$GITHUB_OUTPUT"
           echo "numero=$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "file=MTG-Life-Counter-$nome-build$GITHUB_RUN_NUMBER.apk" >> "$GITHUB_OUTPUT"
           echo "Versione $nome+$GITHUB_RUN_NUMBER"
 
       # La release e' firmata con la debug key (android/app/build.gradle.kts): va bene
@@ -76,11 +77,14 @@ jobs:
             --build-name "${{ steps.versione.outputs.nome }}" \
             --build-number "${{ steps.versione.outputs.numero }}"
 
+      # Nome del file: MTG-Life-Counter-<versione>-build<numero>.apk. Il numero di
+      # build c'e' perche' due run sulla stessa versione (pubspec invariato) devono
+      # produrre due file distinti: scaricandoli non si sovrascrivono a vicenda.
       - name: Prepara l'artefatto
         run: |
           mkdir -p dist
           cp build/app/outputs/flutter-apk/app-release.apk \
-             "dist/mtg_lifecounter-${{ steps.versione.outputs.nome }}.apk"
+             "dist/${{ steps.versione.outputs.file }}"
 
       - name: Salva l'APK come artefatto
         uses: actions/upload-artifact@v4
@@ -113,4 +117,4 @@ jobs:
             va pubblicata sul Play Store.
 
             Installazione: copiare l'APK sul telefono e aprirlo, oppure
-            `adb install -r mtg_lifecounter-*.apk`.
+            `adb install -r MTG-Life-Counter-*.apk`.
