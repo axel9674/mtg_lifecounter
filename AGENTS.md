@@ -37,8 +37,10 @@ si installa per sideload ma non si pubblica. Va bene cosi': e' un'app personale.
 - **Non eseguire mai `flutter test`**, ne' aggiungere golden test o loop di verifica a misura
   di pixel. L'app e' personale e la verifica visiva la fa l'utente sul telefono.
 - **Fare commit, mai `git push`**, se non e' stato chiesto esplicitamente.
-- Messaggi di commit **in italiano**: titolo conciso, poi elenco puntato **senza righe vuote**
-  tra i bullet. Passare il messaggio con un solo `-m` e una here-string.
+- Messaggi di commit **in italiano**: titolo conciso, **riga vuota**, poi elenco puntato
+  **senza righe vuote** tra i bullet. Passare il messaggio con un solo `-m` e una here-string.
+  La riga vuota dopo il titolo non va mai persa: senza, git non separa titolo e descrizione e
+  il messaggio si legge tutto su una riga (es. in `git log --oneline`, nel grafo, ecc.).
 - Non fare refactoring o "pulizie" non richieste.
 - Rispondere in italiano, tono breve e concreto.
 
