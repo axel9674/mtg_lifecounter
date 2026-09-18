@@ -84,7 +84,8 @@ si installa per sideload ma non si pubblica. Va bene cosi': e' un'app personale.
 - `RadialMenu` + `TimerSetupDialog` / `ColorPalette`: overlay che **non si chiudono** con un
   tocco sullo sfondo (`AbsorbPointer`, non un `GestureDetector` vuoto).
 - Persistenza in `shared_preferences` con chiavi `player1Life`, `player2Life`, `player1Color`,
-  `player2Color`, `flipFirstLife`, `timerOn`, `timerMinutes`, `timerSeconds`.
+  `player2Color`, `flipFirstLife`, `opponentLifeVisible`, `timerOn`, `timerMinutes`,
+  `timerSeconds`.
   `_restoreGame()` in `initState`, `_saveGame()` dopo ogni modifica, flag `_touched` per non
   sovrascrivere quello che l'utente ha gia' fatto. `SharedPreferences` e' sempre in `try/catch`.
 - Costanti notevoli in cima al file: `kStartingLife`, `kDefaultPanelColor`, `kPlayerColors`,

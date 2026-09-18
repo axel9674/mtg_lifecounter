@@ -320,6 +320,12 @@ const String _kPlayer2ColorKey = 'player2Color';
 /// cosi' i due numeri guardano in versi opposti (vedi [_twoZones]).
 const String _kFlipFirstLifeKey = 'flipFirstLife';
 
+/// Se la vita dell'avversario si vede accanto al contatore. La scritta compare
+/// solo con la visualizzazione girata (vedi [_LifeCounterHomeState._buildLifeView]):
+/// con le due vite nello stesso verso ognuno legge il numero dell'altro
+/// capovolto, quindi non serve a niente.
+const String _kOpponentLifeVisibleKey = 'opponentLifeVisible';
+
 /// Impostazioni del timer di partita: se e' acceso, quanto dura e quanto tempo
 /// resta. Il tempo resta fermo quando l'app viene riaperta: a farlo ripartire
 /// e' un tocco sul suo box.
@@ -377,6 +383,11 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   /// parte: i due numeri guardano in versi opposti, cosi' ognuno dei due
   /// giocatori legge il proprio contatore dal proprio lato del telefono.
   bool _flipFirstLife = false;
+
+  /// True se la vita dell'avversario si vede accanto al contatore quando le due
+  /// vite guardano in versi opposti. Si puo' nascondere: e' un'informazione in
+  /// piu' che non tutti vogliono avere sotto gli occhi per tutta la partita.
+  bool _opponentLifeVisible = true;
 
   /// Timer di partita: se e' acceso, quanto dura e quanto tempo resta.
   /// Il timer non parte da solo: resta fermo finche' non si tocca il suo box.
@@ -456,6 +467,7 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
         ),
       );
       _flipFirstLife = prefs.getBool(_kFlipFirstLifeKey) ?? false;
+      _opponentLifeVisible = prefs.getBool(_kOpponentLifeVisibleKey) ?? true;
     });
 
     if (_touched) return;
@@ -471,8 +483,9 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   }
 
   /// Ricorda la partita in corso e le impostazioni del tavolo (verso della vita
-  /// del primo giocatore e timer). Sono quattro numeri e tre impostazioni, si
-  /// scrive a ogni cambiamento senza attese ne' salvataggi programmati.
+  /// del primo giocatore, vita avversaria a vista o no, timer). Sono quattro
+  /// numeri e quattro impostazioni, si scrive a ogni cambiamento senza attese ne'
+  /// salvataggi programmati.
   Future<void> _saveGame() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -481,6 +494,7 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       await prefs.setInt(_kPlayer1ColorKey, _player1Color.toARGB32());
       await prefs.setInt(_kPlayer2ColorKey, _player2Color.toARGB32());
       await prefs.setBool(_kFlipFirstLifeKey, _flipFirstLife);
+      await prefs.setBool(_kOpponentLifeVisibleKey, _opponentLifeVisible);
       await prefs.setBool(_kTimerOnKey, _timerOn);
       await prefs.setInt(_kTimerMinutesKey, _timerMinutes);
       // Il tempo rimasto si scrive arrotondato al secondo: e' quello che si
@@ -655,6 +669,16 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     unawaited(_saveGame());
   }
 
+  /// Mostra o nasconde la vita dell'avversario accanto al contatore.
+  ///
+  /// La scritta compare solo con la visualizzazione girata, quindi fuori da li'
+  /// l'opzione e' gia' senza effetto: si puo' scegliere in anticipo e resta
+  /// buona anche dopo aver girato la vita.
+  void toggleOpponentLife() {
+    setState(() => _opponentLifeVisible = !_opponentLifeVisible);
+    unawaited(_saveGame());
+  }
+
   /// Accende o spegne il timer. Accendendolo il tempo torna da capo e resta
   /// fermo: a farlo partire e' il tocco sul suo box.
   void setTimerOn(bool enabled) {
@@ -793,6 +817,16 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
             : 'Gira la vita del giocatore 1',
         onTap: () => runMenuAction(toggleFlipFirstLife),
       ),
+      // La voce resta sempre in elenco, anche quando la scritta non c'e':
+      // cosi' il menu ha sempre le stesse voci nella stessa posizione e
+      // l'opzione si trova anche prima di girare la vita.
+      RadialMenuItem(
+        icon: _opponentLifeVisible ? Icons.visibility : Icons.visibility_off,
+        tooltip: _opponentLifeVisible
+            ? 'Nascondi la vita avversaria'
+            : 'Mostra la vita avversaria',
+        onTap: () => runMenuAction(toggleOpponentLife),
+      ),
       RadialMenuItem(
         icon: Icons.timer,
         tooltip: 'Timer di partita',
@@ -855,8 +889,9 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   /// * in verticale, con la vita del primo giocatore girata, due timer (in cima
   ///   e in fondo), ognuno davanti a chi deve leggerlo;
   /// * in orizzontale, un timer solo in cima e centrato oppure, con la vita del
-  ///   primo giocatore girata, due timer in cima alla meta' di sinistra e a
-  ///   quella di destra.
+  ///   primo giocatore girata, due timer centrati ognuno sulla propria meta'
+  ///   (in cima quella di sinistra, in fondo quella di destra): come in
+  ///   verticale, ogni giocatore ha il timer sotto le cifre che legge.
   ///
   /// Il box fluttua sopra le zone: non toglie spazio al contatore, che resta
   /// grande come quando il timer e' spento.
@@ -864,6 +899,10 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     final outcome = _gameOutcome;
     final wide = _isWide(context);
     final flipped = _flipFirstLife;
+    // La vita dell'avversario si vede solo se le due vite guardano in versi
+    // opposti (ognuno legge il proprio numero) e se non e' stata nascosta dal
+    // menu.
+    final opponentLife = flipped && _opponentLifeVisible;
 
     final zones = _twoZones(
       wide: wide,
@@ -880,10 +919,10 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
         defeated: outcome == GameOutcome.player2,
         // Con la visualizzazione girata le due vite guardano in versi opposti:
         // ognuno legge la propria, quindi accanto c'e' quella dell'altro.
-        opponentLife: flipped ? player2Life : null,
-        // La zona e' ruotata di mezzo giro, quindi per lei "sopra la vita" e'
-        // il bordo interno dello schermo: il timer di questa zona e' sempre sul
-        // bordo esterno (in cima), e li' non ci sono sovrapposizioni.
+        opponentLife: opponentLife ? player2Life : null,
+        // Il timer di questa zona e' in cima allo schermo, che per le sue
+        // cifre girate di mezzo giro vuol dire sotto il contatore: il posto
+        // libero per la scritta e' dall'altra parte.
         opponentLifeAbove: true,
       ),
       second: PlayerZone(
@@ -897,12 +936,11 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
         onColorSelected: (color) => setPlayerColor(2, color),
         winner: outcome == GameOutcome.player2,
         defeated: outcome == GameOutcome.player1,
-        opponentLife: flipped ? player1Life : null,
-        // Questa zona non e' ruotata, quindi "sopra la vita" e' il bordo in
-        // cima allo schermo: va bene col telefono in verticale, dove il suo
-        // timer sta in fondo, ma non in orizzontale, dove il timer sale in
-        // cima alla sua meta' e coprirebbe la scritta. Li' la scritta va sotto.
-        opponentLifeAbove: !wide,
+        opponentLife: opponentLife ? player1Life : null,
+        // Questa zona non e' ruotata: le sue cifre si leggono come lo schermo e
+        // il suo timer sta in fondo (in orizzontale in fondo alla meta' di
+        // destra), quindi sopra il contatore c'e' posto per la scritta.
+        opponentLifeAbove: true,
       ),
     );
 
@@ -920,27 +958,46 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       onLongPress: resetTimer,
     );
 
-    // I due box seguono le zone che li leggono: col telefono in verticale le
-    // zone sono una sopra l'altra, quindi il primo box sta in cima e il secondo
-    // (quando c'e') in fondo; in orizzontale sono affiancate, quindi il primo
-    // sta in cima alla meta' di sinistra (giocatore 1) e il secondo a quella di
-    // destra.
-    final firstAlignment = wide && flipped
-        ? const Alignment(-0.5, -1)
-        : Alignment.topCenter;
-    final secondAlignment = wide
-        ? const Alignment(0.5, -1)
-        : Alignment.bottomCenter;
+    // Il primo box sta in cima alla zona che lo legge, il secondo in fondo:
+    // ognuno e' davanti al giocatore a cui appartiene, e per nessuno dei due
+    // finisce dove sta la vita dell'avversario (che in ogni zona sta sopra il
+    // contatore).
+    final firstTimer = _FloatingTimer(
+      alignment: Alignment.topCenter,
+      child: timer(flipped ? 2 : 0),
+    );
+    final secondTimer = _FloatingTimer(
+      alignment: Alignment.bottomCenter,
+      child: timer(0),
+    );
+
+    // I due box ricalcano la disposizione delle zone (una sopra l'altra in
+    // verticale, una accanto all'altra in orizzontale, con la stessa linea in
+    // mezzo), cosi' ognuno e' centrato sulla zona che lo legge e non su un
+    // quarto di schermo: in orizzontale il contatore sta al centro della sua
+    // meta', non a meta' fra il centro e il bordo.
+    final timers = wide
+        ? Row(
+            children: [
+              Expanded(child: firstTimer),
+              const SizedBox(width: _ZoneDivider._thickness),
+              Expanded(child: secondTimer),
+            ],
+          )
+        : Column(
+            children: [
+              Expanded(child: firstTimer),
+              Expanded(child: secondTimer),
+            ],
+          );
 
     return Stack(
       children: [
         Positioned.fill(child: zones),
-        _FloatingTimer(
-          alignment: firstAlignment,
-          child: timer(flipped ? 2 : 0),
-        ),
-        if (flipped)
-          _FloatingTimer(alignment: secondAlignment, child: timer(0)),
+        // Finche' le due vite guardano nello stesso verso basta il primo box:
+        // da tutte e due le parti del tavolo si legge lo stesso numero, e sta
+        // in cima come le cifre.
+        Positioned.fill(child: flipped ? timers : firstTimer),
       ],
     );
   }
@@ -1462,7 +1519,8 @@ class PlayerZone extends StatelessWidget {
   final int? opponentLife;
 
   /// True se la scritta va sopra la vita, false se va sotto. Si sceglie il lato
-  /// libero dal timer, che nella zona fluttua sul bordo esterno dello schermo.
+  /// libero dal timer, che in ogni zona fluttua in fondo alle cifre di chi le
+  /// legge: il posto libero e' sopra il contatore.
   final bool opponentLifeAbove;
 
   /// Direzione dello swipe che ha aperto la tavolozza (+1 verso il basso,
@@ -2407,9 +2465,10 @@ class GameTimerBox extends StatelessWidget {
 /// spazio, quindi accendere il timer non rimpicciolisce il contatore. Tutto
 /// intorno al box la zona risponde come sempre: i tocchi li prende solo il box.
 class _FloatingTimer extends StatelessWidget {
-  /// Dove appoggiare il box: in cima o in fondo alla schermata, centrato
-  /// oppure sopra meta' schermata (col telefono in orizzontale le due zone sono
-  /// affiancate, quindi ogni zona ha il suo box in cima alla propria meta').
+  /// Dove appoggiare il box dentro lo spazio che gli viene dato: in cima o in
+  /// fondo, centrato. Chi costruisce il box lo mette in una meta' dello schermo
+  /// quando le due zone sono affiancate, quindi [Alignment.topCenter] e
+  /// [Alignment.bottomCenter] lo centrano sulla zona e non sullo schermo.
   final Alignment alignment;
 
   final Widget child;
