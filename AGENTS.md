@@ -188,28 +188,48 @@ i due comandi; non si editano i PNG.
 
 ## Pipeline GitHub Actions
 
-`.github/workflows/build-release.yml` costruisce l'APK e pubblica la release. Tre inneschi:
+`.github/workflows/build-release.yml` costruisce l'APK Android e l'IPA iOS e pubblica la
+release. Quattro job: `versione` (legge la versione dal pubspec e ne ricava i nomi dei file),
+`build` (APK su `ubuntu-latest`), `ios` (IPA su `macos-latest`) e `release`. Tre inneschi:
 
 | evento | cosa succede |
 | --- | --- |
-| push su `main` | build dell'APK, salvato come artefatto del workflow |
-| push di un tag `v*` | build dell'APK + GitHub Release con l'APK allegato |
+| push su `main` | build di APK e IPA, salvati come artefatti del workflow |
+| push di un tag `v*` | build di APK e IPA + GitHub Release con entrambi allegati |
 | `workflow_dispatch` | a mano dalla scheda Actions |
 
 - **GitHub esegue il workflow che sta nel commit spinto**: se il file non c'e' sul ramo o sul
   commit taggato, la pipeline non parte. Un tag su `develop` funziona (il file e' li'), un push
   su `main` funziona solo quando `main` conterra' davvero il codice.
+- `build` e `ios` partono **in parallelo** e leggono `needs.versione.outputs.*`: la versione si
+  legge una volta sola, quindi APK e IPA non possono divergere ne' nel nome ne' nel numero.
 - L'APK esce come `MTG-Life-Counter-<versione>-build<numero>.apk` (non `app-release.apk`):
   ci pensa lo step `Prepara l'artefatto`, che rinomina la copia in `dist/`. Stesso nome che da'
   `tool/build_apk.ps1` per lo stesso commit.
+- L'IPA esce come `MTG-Life-Counter-<versione>-build<numero>.ipa`: il job `ios` lo costruisce
+  con `flutter build ios --release --no-codesign` e poi impacchetta `build/ios/iphoneos/Runner.app`
+  in `Payload/Runner.app` con `ditto`. Non si usa `flutter build ipa` perche' con `--no-codesign`
+  si ferma prima dell'esportazione ("Codesigning disabled with --no-codesign, skipping IPA.")
+  e lascia solo l'archivio.
+- I plugin iOS passano da **Swift Package Manager** (`Runner.xcodeproj` contiene
+  `FlutterGeneratedPluginSwiftPackage`), quindi in CI non servono ne' Podfile ne' CocoaPods:
+  e' il motivo per cui il progetto non ha un Podfile committato.
+- **L'IPA non e' firmato** e non si installa con un doppio clic. Per firmarlo in pipeline
+  servirebbe un account Apple Developer a pagamento (certificato e provisioning profile nei
+  segreti `BUILD_CERTIFICATE_BASE64`, `P12_PASSWORD`, `PROVISIONING_PROFILE_BASE64`, piu'
+  `DEVELOPMENT_TEAM` e `--export-method`). Si installa con Sideloadly o AltStore, che lo
+  rifirmano con il proprio Apple ID (con un Apple ID gratuito la firma dura 7 giorni).
+- Il job `ios` gira su un runner **macOS**, l'unico che ha Xcode: i minuti macOS si pagano
+  **10 volte** quelli di Linux. Se la pipeline diventa pesante, il primo risparmio e' limitare
+  quel job ai tag (`if: startsWith(github.ref, 'refs/tags/v')`).
 - Versione: **tutta dal `version:` di `pubspec.yaml`** (`nome+numero`), unica fonte per
   `flutter run`, `tool/build_apk.ps1` e questa pipeline. Il tag fornisce solo il nome della
   release (`v1.2.3` → `1.2.3`), e se non combacia col pubspec la pipeline lo segnala con un
   `::warning::`; senza tag il nome viene dal pubspec. Il numero dopo il `+` e' il `versionCode`
   e viene passato a `--build-number`: **non deve mai calare**.
-- A release pubblicata lo step `Notifica su Telegram` manda un messaggio con il link diretto
-  all'APK (`releases/download/<tag>/<file>`) e quello alle note. Serve il nome del file, che
-  il job `build` espone come output (`outputs.file` da `steps.versione.outputs.file`).
+- A release pubblicata lo step `Notifica su Telegram` manda un messaggio con i link diretti
+  all'APK e all'IPA (`releases/download/<tag>/<file>`) e quello alle note. I nomi dei file
+  vengono dal job `versione` (`outputs.apk`, `outputs.ipa`).
   Richiede i segreti `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`: se mancano la notifica viene
   saltata con un `::warning::` e la release resta comunque valida.
 - L'`flutter analyze` del workflow e' **non bloccante** (`continue-on-error`): i 12 `info`
@@ -221,7 +241,7 @@ i due comandi; non si editano i PNG.
 
 1. portare il `version:` di `pubspec.yaml` alla versione che si sta per taggare **alzando il
    numero di build** (es. `1.0.1+2` → `1.0.2+3`) e committare: e' quella che mostrera' `flutter run`,
-   la scritta in fondo al menu e l'APK della release;
+   la scritta in fondo al menu e i file della release (APK e IPA);
 2. `git push origin develop` (il ramo, se si vuole che resti allineato);
 3. `git tag v1.0.2` sul commit da pubblicare;
 4. `git push origin v1.0.2`.
@@ -230,6 +250,8 @@ i due comandi; non si editano i PNG.
 `main`. Il tag deve chiamarsi `v<numero>` (deve combaciare col `version:` di pubspec, altrimenti
 la pipeline avvisa) e deve stare su un commit che contiene
 `.github/workflows/build-release.yml`, perche' GitHub esegue il workflow del commit spinto.
+Prima del tag la modifica della pipeline deve essere arrivata su `main`: e' il commit taggato
+che viene costruito, quindi una pipeline modificata solo su `develop` non si vede nella release.
 
 ## Fonti di verita'
 
@@ -237,9 +259,11 @@ la pipeline avvisa) e deve stare su un commit che contiene
 - `pubspec.yaml` — dipendenze, font, configurazione icona e **versione** (unica fonte).
 - `tool/make_icon.ps1` — l'icona.
 - `tool/build_apk.ps1` — l'APK locale, con nome e numero della release.
-- `.github/workflows/build-release.yml` — build e release dell'APK.
+- `.github/workflows/build-release.yml` — build e release di APK e IPA.
 - `android/app/src/main/kotlin/.../MainActivity.kt` — il canale del suono di fine tempo.
 - `android/app/src/main/AndroidManifest.xml` — nome app (`MTG Life Counter`) e icona.
+- `ios/Runner.xcodeproj/project.pbxproj` — progetto iOS (Swift Package Manager, bundle id,
+  firma automatica, iOS 15).
 
 ## Git
 

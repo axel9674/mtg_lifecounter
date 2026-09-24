@@ -1,8 +1,8 @@
-# Build e release dell'APK Android.
+# Build e release dell'APK Android e dell'IPA iOS.
 #
 # Si attiva su:
-#   - push sul ramo `main`  -> costruisce l'APK e lo lascia come artefatto del workflow
-#   - push di un tag `v*`   -> costruisce l'APK e crea la GitHub Release con l'APK allegato
+#   - push sul ramo `main`  -> costruisce APK e IPA e li lascia come artefatti del workflow
+#   - push di un tag `v*`   -> costruisce APK e IPA e crea la GitHub Release con entrambi
 #   - manualmente dalla scheda Actions (`workflow_dispatch`)
 #
 # Nota: GitHub esegue il workflow che sta nel commit spinto, quindi questo file deve
@@ -10,9 +10,13 @@
 # pipeline non parte.
 #
 # Le action sono fissate ai tag di major mobili (vN): si aggiornano a mano. Da v5/v6
-# in poi girano su Node 24 e vogliono un runner >= 2.327.1: `ubuntu-latest` va bene,
-# su runner self-hosted no. `subosito/flutter-action` e' l'unica ancora a `v2`.
-name: Build APK e release
+# in poi girano su Node 24 e vogliono un runner >= 2.327.1: `ubuntu-latest` e
+# `macos-latest` vanno bene, su runner self-hosted no. `subosito/flutter-action` e'
+# l'unica ancora a `v2`.
+#
+# L'IPA ha bisogno di un runner macOS (e' l'unico con Xcode): i suoi minuti si
+# pagano 10 volte quelli di Linux. L'IPA esce **non firmato**, vedi il job `ios`.
+name: Build e release (APK + IPA)
 
 on:
   push:
@@ -28,13 +32,54 @@ env:
   FLUTTER_VERSION: 3.47.4
 
 jobs:
+  # La versione si legge una volta sola e la usano tutti i job: la stessa finisce
+  # nell'APK, nell'IPA e nei nomi dei file allegati alla release.
+  versione:
+    name: Calcola la versione
+    runs-on: ubuntu-latest
+    outputs:
+      nome: ${{ steps.versione.outputs.nome }}
+      numero: ${{ steps.versione.outputs.numero }}
+      apk: ${{ steps.versione.outputs.apk }}
+      ipa: ${{ steps.versione.outputs.ipa }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # La versione sta in `version:` di pubspec.yaml (`nome+numero`) ed e' l'unica
+      # fonte: la usano anche `flutter run` e `tool/build_apk.ps1`, quindi i file qui
+      # costruiti e quelli locali hanno la stessa etichetta e lo stesso numero di build.
+      # Il tag fornisce il nome della release; il numero non deve mai calare: Android
+      # rifiuta l'installazione con INSTALL_FAILED_VERSION_DOWNGRADE (e `flutter run`,
+      # dopo il rifiuto, disinstalla la versione vecchia portandosi via le vite salvate).
+      - name: Leggi la versione da pubspec.yaml
+        id: versione
+        shell: bash
+        run: |
+          pubspec="$(sed -n 's/^version: *//p' pubspec.yaml | head -n1)"
+          nome="${pubspec%%+*}"
+          numero="${pubspec##*+}"
+          if [[ ! "$numero" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::version: '$pubspec' non ha la forma nome+numero (es. 1.0.2+3)"
+            exit 1
+          fi
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF_NAME#v}"
+            if [[ "$tag" != "$nome" ]]; then
+              echo "::warning::Il tag $GITHUB_REF_NAME non combacia col version: '$pubspec' di pubspec.yaml"
+            fi
+            nome="$tag"
+          fi
+          echo "nome=$nome" >> "$GITHUB_OUTPUT"
+          echo "numero=$numero" >> "$GITHUB_OUTPUT"
+          echo "apk=MTG-Life-Counter-$nome-build$numero.apk" >> "$GITHUB_OUTPUT"
+          echo "ipa=MTG-Life-Counter-$nome-build$numero.ipa" >> "$GITHUB_OUTPUT"
+          echo "Versione $nome+$numero"
+
   build:
     name: Build APK release
+    needs: versione
     runs-on: ubuntu-latest
-    # Il nome del file APK viaggia fino al job della release, che lo usa per il
-    # link diretto da mandare su Telegram.
-    outputs:
-      file: ${{ steps.versione.outputs.file }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -61,41 +106,13 @@ jobs:
         run: flutter analyze lib
         continue-on-error: true
 
-      # La versione sta in `version:` di pubspec.yaml (`nome+numero`) ed e' l'unica
-      # fonte: la usano anche `flutter run` e `tool/build_apk.ps1`, quindi l'APK qui
-      # costruito e quello locale hanno la stessa etichetta e lo stesso versionCode.
-      # Il tag fornisce il nome della release; il numero di build non deve mai calare
-      # (Android rifiuta l'installazione con INSTALL_FAILED_VERSION_DOWNGRADE).
-      - name: Calcola la versione
-        id: versione
-        shell: bash
-        run: |
-          pubspec="$(sed -n 's/^version: *//p' pubspec.yaml | head -n1)"
-          nome="${pubspec%%+*}"
-          numero="${pubspec##*+}"
-          if [[ ! "$numero" =~ ^[1-9][0-9]*$ ]]; then
-            echo "::error::version: '$pubspec' non ha la forma nome+numero (es. 1.0.2+3)"
-            exit 1
-          fi
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            tag="${GITHUB_REF_NAME#v}"
-            if [[ "$tag" != "$nome" ]]; then
-              echo "::warning::Il tag $GITHUB_REF_NAME non combacia col version: '$pubspec' di pubspec.yaml"
-            fi
-            nome="$tag"
-          fi
-          echo "nome=$nome" >> "$GITHUB_OUTPUT"
-          echo "numero=$numero" >> "$GITHUB_OUTPUT"
-          echo "file=MTG-Life-Counter-$nome-build$numero.apk" >> "$GITHUB_OUTPUT"
-          echo "Versione $nome+$numero"
-
       # La release e' firmata con la debug key (android/app/build.gradle.kts): va bene
       # per il sideload, non per pubblicare sul Play Store.
       - name: Build APK release
         run: |
           flutter build apk --release \
-            --build-name "${{ steps.versione.outputs.nome }}" \
-            --build-number "${{ steps.versione.outputs.numero }}"
+            --build-name "${{ needs.versione.outputs.nome }}" \
+            --build-number "${{ needs.versione.outputs.numero }}"
 
       # Nome del file: MTG-Life-Counter-<versione>-build<numero>.apk. Uguale a quello
       # che produce `tool/build_apk.ps1` per lo stesso commit.
@@ -103,7 +120,7 @@ jobs:
         run: |
           mkdir -p dist
           cp build/app/outputs/flutter-apk/app-release.apk \
-             "dist/${{ steps.versione.outputs.file }}"
+             "dist/${{ needs.versione.outputs.apk }}"
 
       - name: Salva l'APK come artefatto
         uses: actions/upload-artifact@v7
@@ -112,10 +129,68 @@ jobs:
           path: dist/*.apk
           if-no-files-found: error
 
+  # L'IPA per iOS. Serve `macos-latest` perche' Xcode esiste solo li': i minuti di un
+  # runner macOS si pagano 10 volte quelli di Linux, quindi questo job e' il piu'
+  # costoso della pipeline.
+  #
+  # L'IPA esce **non firmato**: per firmarlo in pipeline servirebbe un account Apple
+  # Developer a pagamento con certificato e provisioning profile nei segreti del
+  # repository (DEVELOPMENT_TEAM, BUILD_CERTIFICATE_BASE64, P12_PASSWORD,
+  # PROVISIONING_PROFILE_BASE64) piu' `--export-method`. Un IPA non firmato si
+  # installa comunque con Sideloadly o AltStore, che lo rifirmano con il proprio
+  # Apple ID al momento dell'installazione (con un Apple ID gratuito la firma dura
+  # 7 giorni); da solo, con un doppio clic, non si installa.
+  ios:
+    name: Build IPA release
+    needs: versione
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Flutter ${{ env.FLUTTER_VERSION }}
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Dipendenze
+        run: flutter pub get
+
+      # I plugin iOS di questo progetto passano da Swift Package Manager
+      # (Runner.xcodeproj contiene FlutterGeneratedPluginSwiftPackage), quindi non
+      # servono ne' Podfile ne' CocoaPods.
+      #
+      # `--no-codesign` e' d'obbligo: senza un team di sviluppo Xcode non sa con
+      # quale certificato firmare. Non si usa `flutter build ipa` perche' con
+      # `--no-codesign` si ferma prima dell'esportazione ("Codesigning disabled with
+      # --no-codesign, skipping IPA.") e lascia solo l'archivio.
+      - name: Build iOS release
+        run: |
+          flutter build ios --release --no-codesign \
+            --build-name "${{ needs.versione.outputs.nome }}" \
+            --build-number "${{ needs.versione.outputs.numero }}"
+
+      # Un IPA e' uno zip che contiene `Payload/Runner.app`. `ditto` e' lo strumento
+      # di macOS per creare l'archivio lasciando i link simbolici al loro posto.
+      - name: Impacchetta l'IPA
+        run: |
+          mkdir -p Payload dist
+          cp -R build/ios/iphoneos/Runner.app Payload/Runner.app
+          ditto -c -k --keepParent Payload "dist/${{ needs.versione.outputs.ipa }}"
+
+      - name: Salva l'IPA come artefatto
+        uses: actions/upload-artifact@v7
+        with:
+          name: mtg-lifecounter-ipa
+          path: dist/*.ipa
+          if-no-files-found: error
+
   release:
     name: Crea la GitHub Release
-    needs: build
-    # Solo per i tag `v*`: un push su `main` costruisce l'APK ma non pubblica niente.
+    needs: [versione, build, ios]
+    # Solo per i tag `v*`: un push su `main` costruisce APK e IPA ma non pubblica niente.
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
@@ -125,11 +200,21 @@ jobs:
           name: mtg-lifecounter-apk
           path: dist
 
+      - name: Scarica l'IPA
+        uses: actions/download-artifact@v8
+        with:
+          name: mtg-lifecounter-ipa
+          path: dist
+
+      # I nomi dei file vengono dal job `versione`: sono gli stessi che danno
+      # `tool/build_apk.ps1` e la build del telefono per lo stesso commit.
       - name: Pubblica la release
         uses: softprops/action-gh-release@v3
         with:
           name: MTG Life Counter ${{ github.ref_name }}
-          files: dist/*.apk
+          files: |
+            dist/*.apk
+            dist/*.ipa
           generate_release_notes: true
           body: |
             APK per il sideload: la build e' firmata con la debug key, quindi non
@@ -138,7 +223,11 @@ jobs:
             Installazione: copiare l'APK sul telefono e aprirlo, oppure
             `adb install -r MTG-Life-Counter-*.apk`.
 
-      # Avviso su Telegram con il link diretto all'APK pubblicato. Servono due
+            IPA per iOS **non firmato**: non si installa con un doppio clic. Serve
+            Sideloadly o AltStore, che lo rifirmano con il proprio Apple ID (con un
+            Apple ID gratuito la firma scade dopo 7 giorni).
+
+      # Avviso su Telegram con i link diretti ai file pubblicati. Servono due
       # segreti del repository:
       #   TELEGRAM_BOT_TOKEN  token del bot (BotFather)
       #   TELEGRAM_CHAT_ID    id della chat che riceve l'avviso
@@ -147,7 +236,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          APK_FILE: ${{ needs.build.outputs.file }}
+          APK_FILE: ${{ needs.versione.outputs.apk }}
+          IPA_FILE: ${{ needs.versione.outputs.ipa }}
           TAG: ${{ github.ref_name }}
         run: |
           if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
@@ -157,6 +247,7 @@ jobs:
 
           repo="https://github.com/$GITHUB_REPOSITORY"
           apk_url="$repo/releases/download/$TAG/$APK_FILE"
+          ipa_url="$repo/releases/download/$TAG/$IPA_FILE"
           release_url="$repo/releases/tag/$TAG"
 
           # Il tag finisce nel messaggio in HTML: l'escaping evita che un
@@ -168,9 +259,10 @@ jobs:
           testo="$(
             printf '%s\n' \
               "<b>MTG Life Counter $titolo</b>" \
-              "Nuova release: APK pronto per il sideload." \
+              "Nuova release: APK Android e IPA iOS pronti." \
               "" \
-              "<a href=\"$apk_url\">$APK_FILE</a>" \
+              "<a href=\"$apk_url\">APK Android: $APK_FILE</a>" \
+              "<a href=\"$ipa_url\">IPA iOS (non firmato): $IPA_FILE</a>" \
               "<a href=\"$release_url\">Note e dettagli</a>"
           )"
 
@@ -182,4 +274,4 @@ jobs:
             --data-urlencode "text=$testo" \
             "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" > /dev/null
 
-          echo "Notifica inviata per $APK_FILE"
+          echo "Notifica inviata per $APK_FILE e $IPA_FILE"
