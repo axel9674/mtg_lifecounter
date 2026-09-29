@@ -1,0 +1,90 @@
+# Builds the iOS release, packs it as an IPA in `dist/` and leaves it to the rest of the
+# pipeline as the artifact `mtg-lifecounter-ipa`. The IPA comes out **unsigned**.
+#
+# Called by build-release.yml through `workflow_call` **on stable tags only** (the reason is
+# in the `ios` job of that file): it has no trigger of its own.
+name: Build the IPA
+
+on:
+  workflow_call:
+    inputs:
+      build-name:
+        description: Version name passed to `--build-name` (no `-SNAPSHOT` suffix).
+        required: true
+        type: string
+      build-number:
+        description: Build number passed to `--build-number` (CFBundleVersion).
+        required: true
+        type: string
+      file-name:
+        description: Name of the file staged in `dist/`, e.g. `MTG-Life-Counter-1.0.4-build5.ipa`.
+        required: true
+        type: string
+
+env:
+  # The pin, to be bumped together with the local SDK (`flutter --version`) and with the same
+  # line in build-apk.yml. The value cannot come from the caller: a reusable workflow can only
+  # receive `inputs`, and the `env` context is not allowed in the `with:` of the call.
+  FLUTTER_VERSION: 3.47.4
+
+permissions:
+  contents: read
+
+jobs:
+  ipa:
+    name: flutter build ios --release
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Flutter ${{ env.FLUTTER_VERSION }}
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Fetch the dependencies
+        run: flutter pub get
+
+      # The iOS plugins of this project go through Swift Package Manager (Runner.xcodeproj
+      # contains FlutterGeneratedPluginSwiftPackage), so neither a Podfile nor CocoaPods is
+      # needed.
+      #
+      # `--no-codesign` is mandatory: without a development team Xcode does not know which
+      # certificate to sign with. `flutter build ipa` is not used on purpose, because with
+      # `--no-codesign` it stops before the export ("Codesigning disabled with --no-codesign,
+      # skipping IPA.") and leaves the archive only.
+      #
+      # An unsigned IPA installs through Sideloadly or AltStore, which re-sign it with your
+      # own Apple ID when it is installed (a signature made with a free Apple ID lasts 7
+      # days); on its own, with a double click, it does not install. Signing it here would
+      # need a paid Apple Developer account with a certificate and a provisioning profile
+      # among the repository secrets (DEVELOPMENT_TEAM, BUILD_CERTIFICATE_BASE64,
+      # P12_PASSWORD, PROVISIONING_PROFILE_BASE64) plus `--export-method`.
+      - name: Build the release IPA
+        env:
+          BUILD_NAME: ${{ inputs.build-name }}
+          BUILD_NUMBER: ${{ inputs.build-number }}
+        run: |
+          flutter build ios --release --no-codesign \
+            --build-name "$BUILD_NAME" \
+            --build-number "$BUILD_NUMBER"
+
+      # An IPA is a zip holding `Payload/Runner.app`. `ditto` is the macOS tool that builds
+      # the archive while leaving the symbolic links in place.
+      - name: Pack the IPA
+        env:
+          FILE_NAME: ${{ inputs.file-name }}
+        run: |
+          mkdir -p Payload dist
+          cp -R build/ios/iphoneos/Runner.app Payload/Runner.app
+          ditto -c -k --keepParent Payload "dist/$FILE_NAME"
+
+      - name: Upload the IPA artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: mtg-lifecounter-ipa
+          path: dist/*.ipa
+          if-no-files-found: error
