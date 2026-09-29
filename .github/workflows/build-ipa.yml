@@ -17,7 +17,7 @@ on:
         required: true
         type: string
       file-name:
-        description: Name of the file staged in `dist/`, e.g. `MTG-Life-Counter-1.0.4-build5.ipa`.
+        description: Name of the file staged in `dist/`, e.g. `MTG-Life-Counter-1.0.4.ipa`.
         required: true
         type: string
 

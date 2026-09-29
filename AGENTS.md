@@ -49,9 +49,10 @@ dicono cosi' sempre la stessa cosa. Il numero dopo il `+` e' il `versionCode` di
 deve mai calare**: se cala, `adb install -r` fallisce con `INSTALL_FAILED_VERSION_DOWNGRADE` e
 `flutter run`, che dopo il fallimento disinstalla la versione vecchia, si porta via vite, colori
 e timer salvati. L'APK esce come
-`build\app\outputs\flutter-apk\MTG-Life-Counter-<versione>-build<numero>.apk`, accanto a
+`build\app\outputs\flutter-apk\MTG-Life-Counter-<versione>.apk`, accanto a
 `app-release.apk` che resta; con `-Snapshot` diventa
-`MTG-Life-Counter-<versione>-SNAPSHOT-build<numero>.apk`, come sui tag di `develop`.
+`MTG-Life-Counter-<versione>-SNAPSHOT.apk`, come sui tag di `develop`. Il numero dopo il `+`
+**non** compare nel nome del file: resta nel `versionCode` dell'APK, dove serve ad Android.
 
 ## Regole operative
 
@@ -262,11 +263,11 @@ riusabili, uno per blocco di lavoro, con il nome di quello che fanno.
 - **La versione si legge una volta sola** nel job `version` e da li' il job `build` e il job
   `ios` prendono `build-name`, `build-number` e `file-name`: partono **in parallelo** e non
   possono divergere ne' nel nome ne' nel numero.
-- L'APK esce come `MTG-Life-Counter-<versione>-build<numero>.apk` (non `app-release.apk`): ci
+- L'APK esce come `MTG-Life-Counter-<versione>.apk` (non `app-release.apk`): ci
   pensa lo step `Stage the APK in dist/`, che copia con il nome definitivo. Stesso nome che da'
   `tool/build_apk.ps1` per lo stesso commit (con `-Snapshot` per gli snapshot di `develop`, dove
   l'etichetta diventa `<versione>-SNAPSHOT`).
-- L'IPA esce come `MTG-Life-Counter-<versione>-build<numero>.ipa`: il file lo costruisce con
+- L'IPA esce come `MTG-Life-Counter-<versione>.ipa`: il file lo costruisce con
   `flutter build ios --release --no-codesign` e poi impacchetta `build/ios/iphoneos/Runner.app`
   in `Payload/Runner.app` con `ditto`. Non si usa `flutter build ipa` perche' con `--no-codesign`
   si ferma prima dell'esportazione ("Codesigning disabled with --no-codesign, skipping IPA.")
@@ -388,7 +389,7 @@ il solo APK: l'IPA si costruisce solo per le release stabili.
 - `lib/main.dart` — l'app.
 - `pubspec.yaml` — dipendenze, font, configurazione icona e **versione** (unica fonte).
 - `tool/make_icon.ps1` — l'icona.
-- `tool/build_apk.ps1` — l'APK locale, con nome e numero della release.
+- `tool/build_apk.ps1` — l'APK locale, con il nome della release.
 - `.github/workflows/` — la pipeline: `build-release.yml` (inneschi e ordine dei job) piu' i
   workflow riusabili `read-version.yml`, `build-apk.yml`, `build-ipa.yml`, `release.yml` e
   `publish-private.yml`. L'IPA si costruisce solo sui tag stabili.

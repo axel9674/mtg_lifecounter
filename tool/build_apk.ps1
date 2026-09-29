@@ -1,5 +1,5 @@
 # Costruisce l'APK release dandogli la stessa etichetta che gli da' la pipeline:
-#   MTG-Life-Counter-<versione>-build<numero>.apk
+#   MTG-Life-Counter-<versione>.apk
 #
 # Versione e numero di build vengono dal `version:` di `pubspec.yaml` (`nome+numero`),
 # cioe' dalla stessa riga che usa `flutter run`: l'APK costruito qui, quello della
@@ -51,9 +51,10 @@ if ($tagBase -match '^[0-9]' -and $tagBase -ne $nome) {
     Write-Warning "pubspec.yaml dice $versione, ma l'ultimo tag e' $tag"
 }
 
-# `-Snapshot` cambia solo l'etichetta del file, non il nome dentro l'APK.
+# `-Snapshot` cambia solo l'etichetta del file, non il nome dentro l'APK (e il numero di
+# build non compare nel nome: resta nel versionCode, dove lo mette `--build-number`).
 $suffisso = if ($Snapshot) { '-SNAPSHOT' } else { '' }
-$file = "MTG-Life-Counter-$nome$suffisso-build$numero.apk"
+$file = "MTG-Life-Counter-$nome$suffisso.apk"
 Write-Host "Versione $nome+$numero  ->  $file" -ForegroundColor Cyan
 
 flutter build apk --release --build-name $nome --build-number $numero

@@ -90,13 +90,15 @@ jobs:
             fi
           fi
 
+          # The build number is **not** in the file names on purpose: it stays in the
+          # `versionCode` of the APK (and in the log line below), where it belongs.
           {
             echo "name=$name"
             echo "number=$number"
             echo "label=$label"
             echo "snapshot=$snapshot"
-            echo "apk=MTG-Life-Counter-$label-build$number.apk"
-            echo "ipa=MTG-Life-Counter-$label-build$number.ipa"
+            echo "apk=MTG-Life-Counter-$label.apk"
+            echo "ipa=MTG-Life-Counter-$label.ipa"
           } >> "$GITHUB_OUTPUT"
 
           echo "Label $label (build $number, from pubspec $name+$number)"

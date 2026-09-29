@@ -16,7 +16,7 @@ on:
         required: true
         type: string
       file-name:
-        description: Name of the file staged in `dist/`, e.g. `MTG-Life-Counter-1.0.4-build5.apk`.
+        description: Name of the file staged in `dist/`, e.g. `MTG-Life-Counter-1.0.4.apk`.
         required: true
         type: string
 
