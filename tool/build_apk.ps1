@@ -5,19 +5,28 @@
 # cioe' dalla stessa riga che usa `flutter run`: l'APK costruito qui, quello della
 # pipeline e la versione mostrata dentro il menu dicono sempre la stessa cosa.
 # Il tag git non serve a costruire, serve solo a ricordare qual e' l'ultima
-# versione pubblicata (se non combacia, lo script avvisa).
+# versione pubblicata (se non combacia, lo script avvisa). Sui tag di `develop`,
+# che portano `-SNAPSHOT` (v1.0.4-SNAPSHOT), il suffisso non conta nel confronto:
+# e' la stessa versione del pubspec, solo non ancora pubblicata.
 #
 # Uso:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tool\build_apk.ps1
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tool\build_apk.ps1 -Install
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tool\build_apk.ps1 -Snapshot
 #
 # `-Install` finisce con `adb install -r`, che conserva i dati dell'app (vite,
 # colori, timer): **non** usare `flutter install`, che prima disinstalla.
+# `-Snapshot` mette `-SNAPSHOT` nell'etichetta del file, come fa la pipeline sui tag
+# di `develop`; il nome dentro l'APK resta quello del pubspec, perche' iOS
+# (CFBundleShortVersionString) accetta solo numeri.
 
 [CmdletBinding()]
 param(
     # Installa l'APK appena costruito sul telefono collegato.
-    [switch]$Install
+    [switch]$Install,
+
+    # Mette -SNAPSHOT nell'etichetta del file, come la pipeline su develop.
+    [switch]$Snapshot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -35,11 +44,16 @@ $nome = $Matches[1]
 # recente racconta un'altra storia (pubspec non allineato al momento del tag).
 $numero = [int]$Matches[2]
 $tag = try { "$(git describe --tags --match 'v[0-9]*' --abbrev=0 2>&1)".Trim() } catch { '' }
-if ($tag -match '^v[0-9]' -and $tag.TrimStart('v') -ne $nome) {
+# Un tag `v1.0.4-SNAPSHOT` e' la stessa versione del pubspec senza il suffisso:
+# senza toglierlo lo script avviserebbe a ogni build su develop.
+$tagBase = if ($tag -match '^v[0-9]') { $tag.TrimStart('v') -replace '-SNAPSHOT$', '' } else { $tag }
+if ($tagBase -match '^[0-9]' -and $tagBase -ne $nome) {
     Write-Warning "pubspec.yaml dice $versione, ma l'ultimo tag e' $tag"
 }
 
-$file = "MTG-Life-Counter-$nome-build$numero.apk"
+# `-Snapshot` cambia solo l'etichetta del file, non il nome dentro l'APK.
+$suffisso = if ($Snapshot) { '-SNAPSHOT' } else { '' }
+$file = "MTG-Life-Counter-$nome$suffisso-build$numero.apk"
 Write-Host "Versione $nome+$numero  ->  $file" -ForegroundColor Cyan
 
 flutter build apk --release --build-name $nome --build-number $numero

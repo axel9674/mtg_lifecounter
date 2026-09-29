@@ -1,13 +1,19 @@
 # Build e release dell'APK Android e dell'IPA iOS.
 #
 # Si attiva su:
-#   - push sul ramo `main`  -> costruisce APK e IPA e li lascia come artefatti del workflow
-#   - push di un tag `v*`   -> costruisce APK e IPA e crea la GitHub Release con entrambi
+#   - push sul ramo `master` -> costruisce APK e IPA e li lascia come artefatti del workflow
+#   - push di un tag `v*`    -> costruisce APK e IPA e crea la GitHub Release con entrambi
+#       - tag `v1.0.4`          -> release stabile: e' lei a diventare la "latest" del repository
+#       - tag `v1.0.5-SNAPSHOT` -> build di `develop`: esce come pre-release e non tocca la latest
 #   - manualmente dalla scheda Actions (`workflow_dispatch`)
+#
+# I rami seguono git flow: `master` e' la produzione, `develop` l'integrazione, le release
+# nascono da `release/*` e le correzioni di emergenza da `hotfix/*` (vedi AGENTS.md).
 #
 # Nota: GitHub esegue il workflow che sta nel commit spinto, quindi questo file deve
 # esistere sul ramo/commit interessato (per i tag: sul commit taggato), altrimenti la
-# pipeline non parte.
+# pipeline non parte. Una modifica della pipeline che vive solo su `develop` non si vede
+# nella release finche' non e' arrivata su `master`.
 #
 # Le action sono fissate ai tag di major mobili (vN): si aggiornano a mano. Da v5/v6
 # in poi girano su Node 24 e vogliono un runner >= 2.327.1: `ubuntu-latest` e
@@ -20,8 +26,8 @@ name: Build e release (APK + IPA)
 
 on:
   push:
-    branches: [main]
-    tags: ['v*']
+    branches: [master]
+    tags: ["v*"]
   workflow_dispatch:
 
 # Serve a creare la release (scrittura sui contenuti del repo).
@@ -40,6 +46,8 @@ jobs:
     outputs:
       nome: ${{ steps.versione.outputs.nome }}
       numero: ${{ steps.versione.outputs.numero }}
+      etichetta: ${{ steps.versione.outputs.etichetta }}
+      snapshot: ${{ steps.versione.outputs.snapshot }}
       apk: ${{ steps.versione.outputs.apk }}
       ipa: ${{ steps.versione.outputs.ipa }}
     steps:
@@ -49,9 +57,15 @@ jobs:
       # La versione sta in `version:` di pubspec.yaml (`nome+numero`) ed e' l'unica
       # fonte: la usano anche `flutter run` e `tool/build_apk.ps1`, quindi i file qui
       # costruiti e quelli locali hanno la stessa etichetta e lo stesso numero di build.
-      # Il tag fornisce il nome della release; il numero non deve mai calare: Android
-      # rifiuta l'installazione con INSTALL_FAILED_VERSION_DOWNGRADE (e `flutter run`,
-      # dopo il rifiuto, disinstalla la versione vecchia portandosi via le vite salvate).
+      # Il tag fornisce solo l'etichetta della release; il numero non deve mai calare:
+      # Android rifiuta l'installazione con INSTALL_FAILED_VERSION_DOWNGRADE (e
+      # `flutter run`, dopo il rifiuto, disinstalla la versione vecchia portandosi via
+      # le vite salvate).
+      #
+      # Sul ramo di sviluppo i tag portano `-SNAPSHOT` (v1.0.4-SNAPSHOT): e' la stessa
+      # versione del pubspec, solo non ancora pubblicata. Il suffisso finisce nell'etichetta
+      # della release e nel nome dei file, **mai** in `--build-name`: iOS
+      # (CFBundleShortVersionString) accetta solo numeri.
       - name: Leggi la versione da pubspec.yaml
         id: versione
         shell: bash
@@ -63,18 +77,26 @@ jobs:
             echo "::error::version: '$pubspec' non ha la forma nome+numero (es. 1.0.2+3)"
             exit 1
           fi
+          etichetta="$nome"
+          snapshot=false
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             tag="${GITHUB_REF_NAME#v}"
-            if [[ "$tag" != "$nome" ]]; then
+            # Il confronto ignora il suffisso: v1.0.4-SNAPSHOT e' la 1.0.4 del pubspec.
+            if [[ "${tag%-SNAPSHOT}" != "$nome" ]]; then
               echo "::warning::Il tag $GITHUB_REF_NAME non combacia col version: '$pubspec' di pubspec.yaml"
             fi
-            nome="$tag"
+            etichetta="$tag"
+            if [[ "$tag" == *-SNAPSHOT ]]; then
+              snapshot=true
+            fi
           fi
           echo "nome=$nome" >> "$GITHUB_OUTPUT"
           echo "numero=$numero" >> "$GITHUB_OUTPUT"
-          echo "apk=MTG-Life-Counter-$nome-build$numero.apk" >> "$GITHUB_OUTPUT"
-          echo "ipa=MTG-Life-Counter-$nome-build$numero.ipa" >> "$GITHUB_OUTPUT"
-          echo "Versione $nome+$numero"
+          echo "etichetta=$etichetta" >> "$GITHUB_OUTPUT"
+          echo "snapshot=$snapshot" >> "$GITHUB_OUTPUT"
+          echo "apk=MTG-Life-Counter-$etichetta-build$numero.apk" >> "$GITHUB_OUTPUT"
+          echo "ipa=MTG-Life-Counter-$etichetta-build$numero.ipa" >> "$GITHUB_OUTPUT"
+          echo "Etichetta $etichetta (build $numero, dal pubspec $nome+$numero)"
 
   build:
     name: Build APK release
@@ -88,7 +110,7 @@ jobs:
         uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Flutter ${{ env.FLUTTER_VERSION }}
         uses: subosito/flutter-action@v2
@@ -190,7 +212,9 @@ jobs:
   release:
     name: Crea la GitHub Release
     needs: [versione, build, ios]
-    # Solo per i tag `v*`: un push su `main` costruisce APK e IPA ma non pubblica niente.
+    # Solo per i tag `v*`: un push su `master` costruisce APK e IPA ma non pubblica niente.
+    # Un tag di develop (`v1.0.5-SNAPSHOT`) esce come **pre-release** e non diventa la
+    # "latest" del repository: quel posto resta alle release stabili taggate su `master`.
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
@@ -206,26 +230,46 @@ jobs:
           name: mtg-lifecounter-ipa
           path: dist
 
+      # La prima parte delle note distingue lo snapshot di `develop` dalla release di
+      # `master`: chi arriva sulla pagina delle release deve capirlo subito.
+      - name: Prepara le note della release
+        run: |
+          if [ "${{ needs.versione.outputs.snapshot }}" = "true" ]; then
+            printf '%s\n' \
+              "**Build di sviluppo** (\`-SNAPSHOT\`): e' lo stato attuale di \`develop\`, non una" \
+              "release. Non e' marcata come latest, quindi l'ultima versione stabile resta" \
+              "quella pubblicata da \`master\`." \
+              "" > note.md
+          else
+            : > note.md
+          fi
+          printf '%s\n' \
+            "APK per il sideload: la build e' firmata con la debug key, quindi non" \
+            "va pubblicata sul Play Store." \
+            "" \
+            "Installazione: copiare l'APK sul telefono e aprirlo, oppure" \
+            "\`adb install -r MTG-Life-Counter-*.apk\`." \
+            "" \
+            "IPA per iOS **non firmato**: non si installa con un doppio clic. Serve" \
+            "Sideloadly o AltStore, che lo rifirmano con il proprio Apple ID (con un" \
+            "Apple ID gratuito la firma scade dopo 7 giorni)." >> note.md
+          cat note.md
+
       # I nomi dei file vengono dal job `versione`: sono gli stessi che danno
       # `tool/build_apk.ps1` e la build del telefono per lo stesso commit.
+      # `prerelease` e `make_latest` sono speculari: solo la release di `master` prende
+      # la "latest", lo snapshot di `develop` no.
       - name: Pubblica la release
         uses: softprops/action-gh-release@v3
         with:
-          name: MTG Life Counter ${{ github.ref_name }}
+          name: MTG Life Counter ${{ needs.versione.outputs.etichetta }}
+          body_path: note.md
+          prerelease: ${{ needs.versione.outputs.snapshot }}
+          make_latest: ${{ needs.versione.outputs.snapshot == 'true' && 'false' || 'true' }}
           files: |
             dist/*.apk
             dist/*.ipa
           generate_release_notes: true
-          body: |
-            APK per il sideload: la build e' firmata con la debug key, quindi non
-            va pubblicata sul Play Store.
-
-            Installazione: copiare l'APK sul telefono e aprirlo, oppure
-            `adb install -r MTG-Life-Counter-*.apk`.
-
-            IPA per iOS **non firmato**: non si installa con un doppio clic. Serve
-            Sideloadly o AltStore, che lo rifirmano con il proprio Apple ID (con un
-            Apple ID gratuito la firma scade dopo 7 giorni).
 
       # Avviso su Telegram con i link diretti ai file pubblicati. Servono due
       # segreti del repository:
@@ -256,10 +300,18 @@ jobs:
           titolo="${titolo//</&lt;}"
           titolo="${titolo//>/&gt;}"
 
+          # Lo snapshot di develop si annuncia come tale: chi legge il messaggio
+          # deve sapere che non e' la release stabile.
+          if [ "${{ needs.versione.outputs.snapshot }}" = "true" ]; then
+            tipo="Build di sviluppo: non e' una release, la stable resta quella di master."
+          else
+            tipo="Nuova release: APK Android e IPA iOS pronti."
+          fi
+
           testo="$(
             printf '%s\n' \
               "<b>MTG Life Counter $titolo</b>" \
-              "Nuova release: APK Android e IPA iOS pronti." \
+              "$tipo" \
               "" \
               "<a href=\"$apk_url\">APK Android: $APK_FILE</a>" \
               "<a href=\"$ipa_url\">IPA iOS (non firmato): $IPA_FILE</a>" \
