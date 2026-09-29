@@ -1,11 +1,15 @@
 # Build e release dell'APK Android e dell'IPA iOS.
 #
 # Si attiva su:
-#   - push sul ramo `master` -> costruisce APK e IPA e li lascia come artefatti del workflow
-#   - push di un tag `v*`    -> costruisce APK e IPA e crea la GitHub Release con entrambi
+#   - push sul ramo `master` -> costruisce l'APK e lo lascia come artefatto del workflow
+#   - push di un tag `v*`    -> crea la GitHub Release con l'APK (e l'IPA, quando c'e')
 #       - tag `v1.0.4`          -> release stabile: e' lei a diventare la "latest" del repository
 #       - tag `v1.0.5-SNAPSHOT` -> build di `develop`: esce come pre-release e non tocca la latest
 #   - manualmente dalla scheda Actions (`workflow_dispatch`)
+#
+# L'IPA lo costruisce solo il job `ios`, che gira **solo sui tag stabili** (la ragione sta
+# li'): su `master`, sui `workflow_dispatch` e sugli snapshot la release esce col solo APK,
+# e note e messaggio Telegram non nominano un IPA che non c'e'.
 #
 # I rami seguono git flow: `master` e' la produzione, `develop` l'integrazione, le release
 # nascono da `release/*` e le correzioni di emergenza da `hotfix/*` (vedi AGENTS.md).
@@ -20,8 +24,9 @@
 # `macos-latest` vanno bene, su runner self-hosted no. `subosito/flutter-action` e'
 # l'unica ancora a `v2`.
 #
-# L'IPA ha bisogno di un runner macOS (e' l'unico con Xcode): i suoi minuti si
-# pagano 10 volte quelli di Linux. L'IPA esce **non firmato**, vedi il job `ios`.
+# L'IPA ha bisogno di un runner macOS (e' l'unico con Xcode): i suoi minuti si pagano
+# 10 volte quelli di Linux, quindi quel job gira solo per le release stabili. L'IPA esce
+# **non firmato**, vedi il job `ios`.
 name: Build e release (APK + IPA)
 
 on:
@@ -155,6 +160,12 @@ jobs:
   # runner macOS si pagano 10 volte quelli di Linux, quindi questo job e' il piu'
   # costoso della pipeline.
   #
+  # Parte **solo per le release stabili** (`v1.0.4`): su un push su `master`, su un
+  # `workflow_dispatch` e sugli snapshot di `develop` viene saltato. Quei minuti costosi
+  # non cambierebbero niente (l'IPA di uno snapshot va comunque rifirmato per installarlo,
+  # e chi prova `develop` vuole l'APK) e il job `release` non dipende da questo: senza IPA
+  # salta solo lo scarico dell'artefatto.
+  #
   # L'IPA esce **non firmato**: per firmarlo in pipeline servirebbe un account Apple
   # Developer a pagamento con certificato e provisioning profile nei segreti del
   # repository (DEVELOPMENT_TEAM, BUILD_CERTIFICATE_BASE64, P12_PASSWORD,
@@ -165,6 +176,7 @@ jobs:
   ios:
     name: Build IPA release
     needs: versione
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-SNAPSHOT')
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -212,10 +224,18 @@ jobs:
   release:
     name: Crea la GitHub Release
     needs: [versione, build, ios]
-    # Solo per i tag `v*`: un push su `master` costruisce APK e IPA ma non pubblica niente.
+    # Solo per i tag `v*`: un push su `master` costruisce gli artefatti ma non pubblica niente.
     # Un tag di develop (`v1.0.5-SNAPSHOT`) esce come **pre-release** e non diventa la
     # "latest" del repository: quel posto resta alle release stabili taggate su `master`.
-    if: startsWith(github.ref, 'refs/tags/v')
+    #
+    # `!cancelled()` e il controllo sull'APK tengono la release al riparo da iOS: sugli
+    # snapshot il job `ios` viene saltato, ma un runner macOS senza minuti o Xcode che cambia
+    # idea non devono impedire di pubblicare l'APK gia' costruito. Un job saltato o fallito
+    # non "cancella" il workflow, quindi la release parte lo stesso.
+    if: >-
+      !cancelled()
+      && startsWith(github.ref, 'refs/tags/v')
+      && needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Scarica l'APK
@@ -224,7 +244,11 @@ jobs:
           name: mtg-lifecounter-apk
           path: dist
 
+      # L'artefatto c'e' solo se il job `ios` ha girato ed e' riuscito (`failure` e `skipped`
+      # non combaciano con `success`): senza IPA la release esce col solo APK, e le note qui
+      # sotto se ne accorgono da `IOS_RESULT`.
       - name: Scarica l'IPA
+        if: needs.ios.result == 'success'
         uses: actions/download-artifact@v8
         with:
           name: mtg-lifecounter-ipa
@@ -241,6 +265,7 @@ jobs:
           APK_FILE: ${{ needs.versione.outputs.apk }}
           IPA_FILE: ${{ needs.versione.outputs.ipa }}
           SNAPSHOT: ${{ needs.versione.outputs.snapshot }}
+          IOS_RESULT: ${{ needs.ios.result }}
         run: |
           if [ "$SNAPSHOT" = "true" ]; then
             printf '%s\n' \
@@ -252,14 +277,32 @@ jobs:
           else
             : > note.md
           fi
+
+          # L'IPA c'e' solo quando il job `ios` ha girato ed e' riuscito: sugli snapshot non
+          # parte. Le note nominano l'IPA **solo se c'e' davvero**: un allegato promesso e non
+          # consegnato si legge peggio di una release con un file solo.
+          if [ "$IOS_RESULT" = "success" ]; then
+            has_ipa=true
+            allegati="Both the Android and the iOS build are attached to this release."
+            requisiti="Android 7.0 (API 24) or newer, or iOS 15 or newer."
+          else
+            has_ipa=false
+            allegati="The Android build is attached to this release."
+            requisiti="Android 7.0 (API 24) or newer."
+          fi
+
           printf '%s\n' \
-            "A two-player life counter for Magic: The Gathering. Both mobile builds are" \
-            "attached to this release." \
+            "A two-player life counter for Magic: The Gathering. $allegati" \
             "" \
             "### Downloads" \
             "" \
-            "- **Android** - \`$APK_FILE\`, signed with the Android debug key" \
-            "- **iOS** - \`$IPA_FILE\`, unsigned" \
+            "- **Android** - \`$APK_FILE\`, signed with the Android debug key" >> note.md
+
+          if [ "$has_ipa" = true ]; then
+            printf '%s\n' "- **iOS** - \`$IPA_FILE\`, unsigned" >> note.md
+          fi
+
+          printf '%s\n' \
             "" \
             "### Installing on Android" \
             "" \
@@ -267,18 +310,23 @@ jobs:
             "or, with the phone connected over USB, run \`adb install -r $APK_FILE\`." \
             "The package is signed with the Android debug key, so it is meant for" \
             "sideloading: Google Play will not accept it, and every later build has to be" \
-            "installed the same way, otherwise Android refuses it as an update." \
-            "" \
-            "### Installing on iOS" \
-            "" \
-            "The IPA is not signed and will not install with a double click. Sideload it" \
-            "with Sideloadly or AltStore: they re-sign it with your own Apple ID, and a" \
-            "signature made with a free Apple ID expires after 7 days." \
+            "installed the same way, otherwise Android refuses it as an update." >> note.md
+
+          if [ "$has_ipa" = true ]; then
+            printf '%s\n' \
+              "" \
+              "### Installing on iOS" \
+              "" \
+              "The IPA is not signed and will not install with a double click. Sideload it" \
+              "with Sideloadly or AltStore: they re-sign it with your own Apple ID, and a" \
+              "signature made with a free Apple ID expires after 7 days." >> note.md
+          fi
+
+          printf '%s\n' \
             "" \
             "### Requirements" \
             "" \
-            "Android 7.0 (API 24) or newer, or iOS 15 or newer. The app interface is in" \
-            "Italian." \
+            "$requisiti The app interface is in Italian." \
             "" \
             "Source code, build instructions and every other release:" \
             "https://github.com/$GITHUB_REPOSITORY" >> note.md
@@ -298,6 +346,8 @@ jobs:
           files: |
             dist/*.apk
             dist/*.ipa
+          # Senza IPA il secondo pattern non combacia niente: non e' un errore.
+          fail_on_unmatched_files: false
           generate_release_notes: true
 
       # Avviso su Telegram con i link diretti ai file pubblicati. Servono due
@@ -305,12 +355,19 @@ jobs:
       #   TELEGRAM_BOT_TOKEN  token del bot (BotFather)
       #   TELEGRAM_CHAT_ID    id della chat che riceve l'avviso
       # Se mancano la notifica viene saltata e la release resta valida.
+      #
+      # La notifica e' un di piu' e non ha potere sull'esito del run: con
+      # `continue-on-error` un rifiuto di Telegram (token scaduto, bot bloccato, rate limit)
+      # non rende rosso un run che ha gia' pubblicato la release.
       - name: Notifica su Telegram
+        continue-on-error: true
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           APK_FILE: ${{ needs.versione.outputs.apk }}
           IPA_FILE: ${{ needs.versione.outputs.ipa }}
+          SNAPSHOT: ${{ needs.versione.outputs.snapshot }}
+          IOS_RESULT: ${{ needs.ios.result }}
           TAG: ${{ github.ref_name }}
         run: |
           if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
@@ -332,22 +389,28 @@ jobs:
           # Il messaggio e' in inglese come le note della release (lo legge chi arriva
           # sulla pagina delle release, non solo chi ha scritto l'app).
           # Lo snapshot di develop si annuncia come tale: chi legge il messaggio
-          # deve sapere che non e' la release stabile.
-          if [ "${{ needs.versione.outputs.snapshot }}" = "true" ]; then
+          # deve sapere che non e' la release stabile. L'IPA si nomina solo se c'e'
+          # (stessa regola delle note, da `IOS_RESULT`).
+          if [ "$SNAPSHOT" = "true" ]; then
             tipo="Development build: not a release, the latest stable version is unchanged."
-          else
+          elif [ "$IOS_RESULT" = "success" ]; then
             tipo="New release: the Android APK and the iOS IPA are ready."
+          else
+            tipo="New release: the Android APK is ready."
           fi
 
-          testo="$(
-            printf '%s\n' \
-              "<b>MTG Life Counter $titolo</b>" \
-              "$tipo" \
-              "" \
-              "<a href=\"$apk_url\">Android APK: $APK_FILE</a>" \
-              "<a href=\"$ipa_url\">iOS IPA (unsigned): $IPA_FILE</a>" \
-              "<a href=\"$release_url\">What's in this release</a>"
-          )"
+          righe=(
+            "<b>MTG Life Counter $titolo</b>"
+            "$tipo"
+            ""
+            "<a href=\"$apk_url\">Android APK: $APK_FILE</a>"
+          )
+          if [ "$IOS_RESULT" = "success" ]; then
+            righe+=("<a href=\"$ipa_url\">iOS IPA (unsigned): $IPA_FILE</a>")
+          fi
+          righe+=("<a href=\"$release_url\">What's in this release</a>")
+
+          testo="$(printf '%s\n' "${righe[@]}")"
 
           # Il testo lo codifica curl: niente escaping a mano nella query.
           curl -sS --fail --retry 3 --retry-connrefused \
@@ -357,4 +420,4 @@ jobs:
             --data-urlencode "text=$testo" \
             "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" > /dev/null
 
-          echo "Notifica inviata per $APK_FILE e $IPA_FILE"
+          echo "Notifica inviata per la release $TAG"

@@ -1110,7 +1110,11 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       ),
       RadialMenuItem(
         icon: Icons.timer,
-        tooltip: 'Timer di partita',
+        // Il verso dei gesti del box sta qui e non sul box: la voce si preme e
+        // basta, quindi la pressione lunga e' libera e il suggerimento si vede.
+        tooltip:
+            'Timer di partita'
+            ' (il box: tocco avvia o ferma, tieni premuto azzera)',
         onTap: () => runMenuAction(showTimerSetup),
       ),
       // I segnalini veleno si accendono da qui: la maggior parte delle partite
@@ -1119,8 +1123,8 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       RadialMenuItem(
         icon: Icons.coronavirus,
         tooltip: _poisonVisible
-            ? 'Nascondi i segnalini veleno'
-            : 'Mostra i segnalini veleno',
+            ? 'Nascondi i segnalini veleno (tocco: +1, tieni premuto: -1)'
+            : 'Mostra i segnalini veleno (tocco: +1, tieni premuto: -1)',
         onTap: () => runMenuAction(togglePoison),
       ),
     ];
@@ -1672,9 +1676,13 @@ class RadialMenu extends StatelessWidget {
                     math.cos(angle) * _radius,
                     math.sin(angle) * _radius,
                   );
-                  final progress = CurvedAnimation(
-                    parent: animation,
-                    curve: Curves.easeOutCubic,
+                  // `drive` invece di `CurvedAnimation`: quest'ultimo registra
+                  // un listener sul controller a ogni chiamata, e `build` gira
+                  // a ogni `setState` (anche a menu chiuso) mentre il
+                  // controller vive quanto l'app: i listener si
+                  // accumulerebbero senza limite.
+                  final progress = animation.drive(
+                    CurveTween(curve: Curves.easeOutCubic),
                   );
                   return AnimatedBuilder(
                     animation: progress,
@@ -2937,8 +2945,14 @@ class GameTimerBox extends StatelessWidget {
 
     return RotatedBox(
       quarterTurns: quarterTurns,
-      child: Tooltip(
-        message: expired
+      // `Semantics` e non `Tooltip`: qui la pressione lunga e' presa da questo
+      // `GestureDetector`, e il tooltip (il cui `Listener` sta piu' in alto)
+      // perde l'arena dei gesti, quindi non si vedrebbe mai. Il testo resta
+      // come suggerimento per il lettore di schermo, mentre il verso dei gesti
+      // si legge sul tooltip della voce "Timer di partita" del menu, dove la
+      // pressione lunga e' libera.
+      child: Semantics(
+        tooltip: expired
             ? 'Tempo scaduto: tocca per ripartire, tieni premuto per azzerare'
             : (running
                   ? 'Ferma il timer (tieni premuto per azzerare)'
@@ -3205,8 +3219,12 @@ class _PoisonCounterState extends State<_PoisonCounter> {
 
     return RotatedBox(
       quarterTurns: widget.quarterTurns,
-      child: Tooltip(
-        message:
+      // Come per il box del timer: la pressione lunga e' qui, quindi un
+      // `Tooltip` non comparirebbe mai. Il testo resta per il lettore di
+      // schermo e il verso dei gesti sta sul tooltip della voce del menu dei
+      // veleni.
+      child: Semantics(
+        tooltip:
             'Veleno: ${widget.value}/$kLethalPoison'
             ' (tocco: +1, tieni premuto: -1)',
         child: GestureDetector(

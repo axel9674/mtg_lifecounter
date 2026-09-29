@@ -80,6 +80,8 @@ e timer salvati. L'APK esce come
 - Aggiungere un **plugin** richiede un riavvio completo di `flutter run` (non basta l'hot
   restart); per le modifiche a widget basta l'hot reload. Su web usare `navigate_page`
   per ricaricare la pagina dell'app quando l'albero dei widget sembra vecchio.
+  I plugin in uso sono tre: `shared_preferences` (vite, colori, veleni e timer),
+  `package_info_plus` (la versione in fondo al menu) e `wakelock_plus` (schermo acceso).
 
 ## Architettura (mappa rapida di `lib/main.dart`)
 
@@ -97,6 +99,13 @@ e timer salvati. L'APK esce come
 - -1/+1 si applicano su `onTapUp` (non `onTapDown`), altrimenti uno swipe cambierebbe la
   vita; `onTapDown` serve solo al velo di feedback `_TapShade`.
 - Long press su un lato: primo punto immediato + `Timer.periodic(140 ms)`.
+- **Niente `Tooltip` su un widget che ha gia' una pressione lunga**: il `Tooltip` registra un
+  proprio `LongPressGestureRecognizer`, il cui `Listener` sta **sopra** il figlio, quindi entra
+  nell'arena dei gesti dopo quello del figlio e non vince mai. Il testo non comparirebbe e il
+  gesto del figlio resterebbe l'unico a rispondere: una promessa invisibile. Il suggerimento
+  visibile va dove la pressione lunga e' libera (la voce del menu, che si preme e basta) e il
+  testo per i lettori di schermo lo mette `Semantics(tooltip: ...)`. E' il motivo per cui il box
+  del timer e la pillola dei veleni hanno `Semantics` e non `Tooltip`.
 - `_MenuIconButton` e' il bottone unico del menu (hexagon centrale, voci radiali, chiusura
   dado). Dipinge la propria forma con `_MenuButtonShapePainter` invece di usare
   `Material`/`InkWell`: il feedback premuto e' un velo di colore, scelta preferita dall'utente.
@@ -126,9 +135,9 @@ e timer salvati. L'APK esce come
   errori. Vanno da zero a `kLethalPoison` (**10**) e a dieci si **perde senza passare dalle
   vite**: `_gameOutcome` guarda anche i veleni, la pillola si accende di verde (verde anche
   l'icona, nera la scritta su fondo chiaro) e la zona mostra il cartello VINCE/PERDE. Si
-  accendono dalla voce del menu (icona virus, tooltip "Mostra/Nascondi i segnalini veleno",
-  chiave `poisonVisible`) e **all'inizio stanno spenti**: chi non gioca infect non se li trova
-  sullo schermo. Spegnerli **non** azzera i valori: chi e' a dieci resta avvelenato a morte
+  accendono dalla voce del menu (icona virus, tooltip "Mostra/Nascondi i segnalini veleno
+  (tocco: +1, tieni premuto: -1)", chiave `poisonVisible`) e **all'inizio stanno spenti**: chi non
+  gioca infect non se li trova sullo schermo. Spegnerli **non** azzera i valori: chi e' a dieci resta avvelenato a morte
   anche a pillole nascoste. I veleni tornano a zero con "Nuova partita" (`resetLife`), non dal
   menu dei veleni.
 - La voce "Nuova partita" (icona refresh) non apre nessun popup: mostra `_LifePresetPicker`,
@@ -156,7 +165,11 @@ e timer salvati. L'APK esce come
   aperto (stessa animazione delle voci, `Opacity` + `IgnorePointer`). Il numero lo legge
   `_loadAppVersion()` da `package_info_plus` (`versione+build`, quindi c'e' anche il numero di
   build delle release); se la lettura fallisce o torna vuota (sul web `version.json` non c'e')
-  la scritta non compare. E' l'unica dipendenza oltre a quelle del contatore.
+  la scritta non compare.
+- Lo schermo resta acceso finche' l'app e' davanti: `_keepScreenOn()` in `initState` e
+  `_releaseScreen()` in `dispose` usano `wakelock_plus`, perche' fra un turno e l'altro si tocca
+  il contatore di rado e lo schermo si spegnerebbe da solo. Se il plugin non e' disponibile si
+  torna al comportamento normale e l'app funziona lo stesso.
 - Persistenza in `shared_preferences` con chiavi `player1Life`, `player2Life`, `player1Color`,
   `player2Color`, `player1Poison`, `player2Poison`, `flipFirstLife`, `opponentLifeVisible`,
   `poisonVisible`, `timerOn`, `timerMinutes`, `timerSeconds`, `timerDeadline`, `startingLife`.
@@ -164,7 +177,7 @@ e timer salvati. L'APK esce come
   sovrascrivere quello che l'utente ha gia' fatto. `SharedPreferences` e' sempre in `try/catch`.
 - Costanti notevoli in cima al file: `kStartingLife`, `kMinStartingLife`, `kMaxStartingLife`,
   `kLethalPoison`, `kDefaultPanelColor`, `kPlayerColors`,
-  `kNumberFontSize`, `kNumberBoxWidth`, `kSignBoxWidth`, `kCounterGap`, `kLifeCounterScale`,
+  `kNumberFontSize`, `kNumberBoxWidth`, `kSignBoxWidth`, `kCounterGap`,
   `kCounterSideInset`, `kComboWindow`, `kComboScale`, `kNumberFontFamily`.
 
 ## Stile e tipografia
@@ -209,22 +222,24 @@ i due comandi; non si editano i PNG.
 
 ## Pipeline GitHub Actions
 
-`.github/workflows/build-release.yml` costruisce l'APK Android e l'IPA iOS e pubblica la
-release. Quattro job: `versione` (legge la versione dal pubspec e ne ricava i nomi dei file),
-`build` (APK su `ubuntu-latest`), `ios` (IPA su `macos-latest`) e `release`. Tre inneschi:
+`.github/workflows/build-release.yml` costruisce l'APK Android (e l'IPA iOS sulle release
+stabili) e pubblica la release. Quattro job: `versione` (legge la versione dal pubspec e ne
+ricava i nomi dei file), `build` (APK su `ubuntu-latest`), `ios` (IPA su `macos-latest`, solo sui
+tag stabili) e `release`. Tre inneschi:
 
 | evento | cosa succede |
 | --- | --- |
-| push su `master` | build di APK e IPA, salvati come artefatti del workflow |
-| tag `v1.0.4` (release, da `master`) | build + GitHub Release con i due allegati, marcata "latest" |
-| tag `v1.0.4-SNAPSHOT` (da `develop`) | build + GitHub Release **pre-release**: la "latest" non si tocca |
-| `workflow_dispatch` | a mano dalla scheda Actions |
+| push su `master` | build del solo APK, salvato come artefatto del workflow (il job `ios` non parte) |
+| tag `v1.0.4` (release, da `master`) | build di APK e IPA + GitHub Release con i due allegati, marcata "latest" |
+| tag `v1.0.4-SNAPSHOT` (da `develop`) | build del solo APK + GitHub Release **pre-release**: la "latest" non si tocca |
+| `workflow_dispatch` | a mano dalla scheda Actions (solo APK) |
 
 - **GitHub esegue il workflow che sta nel commit spinto**: se il file non c'e' sul ramo o sul
   commit taggato, la pipeline non parte. Un tag su `develop` funziona (il file e' li'), un push
   su `master` funziona solo quando `master` conterra' davvero il codice.
-- `build` e `ios` partono **in parallelo** e leggono `needs.versione.outputs.*`: la versione si
-  legge una volta sola, quindi APK e IPA non possono divergere ne' nel nome ne' nel numero.
+- `build` e `ios` (quando c'e') partono **in parallelo** e leggono `needs.versione.outputs.*`:
+  la versione si legge una volta sola, quindi APK e IPA non possono divergere ne' nel nome ne'
+  nel numero.
 - L'APK esce come `MTG-Life-Counter-<versione>-build<numero>.apk` (non `app-release.apk`):
   ci pensa lo step `Prepara l'artefatto`, che rinomina la copia in `dist/`. Stesso nome che da'
   `tool/build_apk.ps1` per lo stesso commit (con `-Snapshot` per gli snapshot di `develop`,
@@ -243,9 +258,17 @@ release. Quattro job: `versione` (legge la versione dal pubspec e ne ricava i no
   `DEVELOPMENT_TEAM` e `--export-method`). Si installa con Sideloadly o AltStore, che lo
   rifirmano con il proprio Apple ID (con un Apple ID gratuito la firma dura 7 giorni).
 - Il job `ios` gira su un runner **macOS**, l'unico che ha Xcode: i minuti macOS si pagano
-  **10 volte** quelli di Linux. Se la pipeline diventa pesante, il primo risparmio e' limitare
-  quel job alle release stabili, lasciando fuori gli snapshot:
+  **10 volte** quelli di Linux, quindi quel job parte **solo per le release stabili**:
   `if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-SNAPSHOT')`.
+  Restano fuori i push su `master`, i `workflow_dispatch` e gli snapshot di `develop`: sono
+  minuti che non cambierebbero niente (l'IPA di uno snapshot va comunque rifirmato per
+  installarlo, e chi prova `develop` vuole l'APK). Il prezzo e' che uno snapshot esce **col solo
+  APK**, ed e' esattamente quello che dicono le note e il messaggio Telegram.
+- **La release non dipende da iOS**: `release` ha
+  `if: !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.build.result == 'success'`,
+  lo step che scarica l'IPA ha `if: needs.ios.result == 'success'` e `files:` tiene i due
+  pattern con `fail_on_unmatched_files: false`. Un runner macOS senza minuti, o Xcode che cambia
+  idea, non possono impedire di pubblicare l'APK gia' costruito.
 - Versione: **tutta dal `version:` di `pubspec.yaml`** (`nome+numero`), unica fonte per
   `flutter run`, `tool/build_apk.ps1` e questa pipeline. Il tag fornisce solo l'etichetta della
   release (`v1.2.3` → `1.2.3`, `v1.2.3-SNAPSHOT` → `1.2.3-SNAPSHOT`), e se non combacia col
@@ -260,12 +283,16 @@ release. Quattro job: `versione` (legge la versione dal pubspec e ne ricava i no
   **in inglese**, come il messaggio Telegram: le legge chi arriva sulla pagina delle release dal
   di fuori, quindi raccontano cosa e' l'app, cosa c'e' negli allegati e come si installano
   (APK firmato con la debug key, IPA non firmato da rifirmare con un Apple ID, requisiti di
-  sistema). I commenti del workflow e di tutto il progetto restano invece in italiano.
+  sistema). Tutto quello che riguarda l'IPA compare **solo se l'IPA c'e'** (`IOS_RESULT`, cioe'
+  `needs.ios.result`): niente allegati promessi e non consegnati. I commenti del workflow e di
+  tutto il progetto restano invece in italiano.
 - A release pubblicata lo step `Notifica su Telegram` manda un messaggio con i link diretti
-  all'APK e all'IPA (`releases/download/<tag>/<file>`) e quello alle note. I nomi dei file
-  vengono dal job `versione` (`outputs.apk`, `outputs.ipa`).
+  all'APK (e all'IPA, quando c'e': `releases/download/<tag>/<file>`) e quello alle note. I nomi
+  dei file vengono dal job `versione` (`outputs.apk`, `outputs.ipa`).
   Richiede i segreti `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`: se mancano la notifica viene
   saltata con un `::warning::` e la release resta comunque valida.
+- La notifica ha `continue-on-error: true`: Telegram e' un di piu', e un rifiuto (token scaduto,
+  bot bloccato, rate limit) non deve rendere rosso un run che ha gia' pubblicato la release.
 - L'`flutter analyze` del workflow e' **non bloccante** (`continue-on-error`): i 12 `info`
   preesistenti farebbero altrimenti fallire la build.
 - Flutter pinnato a `3.47.4` in cima al file (`env.FLUTTER_VERSION`): da aggiornare insieme
@@ -298,7 +325,8 @@ git tag v1.0.4-SNAPSHOT
 git push origin v1.0.4-SNAPSHOT
 ```
 
-Esce come pre-release, quindi la "latest" del repository resta la stable di `master`.
+Esce come pre-release, quindi la "latest" del repository resta la stable di `master`, e contiene
+il solo APK: l'IPA si costruisce solo per le release stabili.
 
 ## Fonti di verita'
 
@@ -306,7 +334,8 @@ Esce come pre-release, quindi la "latest" del repository resta la stable di `mas
 - `pubspec.yaml` — dipendenze, font, configurazione icona e **versione** (unica fonte).
 - `tool/make_icon.ps1` — l'icona.
 - `tool/build_apk.ps1` — l'APK locale, con nome e numero della release.
-- `.github/workflows/build-release.yml` — build e release di APK e IPA.
+- `.github/workflows/build-release.yml` — build e release di APK e IPA (l'IPA solo sui tag
+  stabili).
 - `android/app/src/main/kotlin/.../MainActivity.kt` — il canale del suono di fine tempo.
 - `android/app/src/main/AndroidManifest.xml` — nome app (`MTG Life Counter`) e icona.
 - `ios/Runner.xcodeproj/project.pbxproj` — progetto iOS (Swift Package Manager, bundle id,
