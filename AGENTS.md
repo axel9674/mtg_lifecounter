@@ -62,6 +62,9 @@ e timer salvati. L'APK esce come
   **senza righe vuote** tra i bullet. Passare il messaggio con un solo `-m` e una here-string.
   La riga vuota dopo il titolo non va mai persa: senza, git non separa titolo e descrizione e
   il messaggio si legge tutto su una riga (es. in `git log --oneline`, nel grafo, ecc.).
+- L'unico testo **in inglese** del progetto e' quello che esce all'esterno: le note della
+  release e il messaggio Telegram (li legge chi non ha scritto l'app). Tutto il resto — codice,
+  commenti, commit, documentazione — resta in italiano.
 - Non fare refactoring o "pulizie" non richieste.
 - Rispondere in italiano, tono breve e concreto.
 
@@ -253,6 +256,11 @@ release. Quattro job: `versione` (legge la versione dal pubspec e ne ricava i no
 - Lo snapshot di `develop` esce con `prerelease: true` e `make_latest: false`: GitHub non lo
   mette in cima alle release, quindi `releases/latest/download/...` continua a servire la stable
   di `master`. Note e messaggio Telegram dicono che e' una build di sviluppo.
+- Le note della release (step `Prepara le note della release`, `body_path: note.md`) sono
+  **in inglese**, come il messaggio Telegram: le legge chi arriva sulla pagina delle release dal
+  di fuori, quindi raccontano cosa e' l'app, cosa c'e' negli allegati e come si installano
+  (APK firmato con la debug key, IPA non firmato da rifirmare con un Apple ID, requisiti di
+  sistema). I commenti del workflow e di tutto il progetto restano invece in italiano.
 - A release pubblicata lo step `Notifica su Telegram` manda un messaggio con i link diretti
   all'APK e all'IPA (`releases/download/<tag>/<file>`) e quello alle note. I nomi dei file
   vengono dal job `versione` (`outputs.apk`, `outputs.ipa`).

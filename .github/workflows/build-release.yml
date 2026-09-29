@@ -230,29 +230,58 @@ jobs:
           name: mtg-lifecounter-ipa
           path: dist
 
-      # La prima parte delle note distingue lo snapshot di `develop` dalla release di
-      # `master`: chi arriva sulla pagina delle release deve capirlo subito.
+      # Le note della release sono in **inglese**: le legge chi arriva sulla pagina delle
+      # release dal di fuori, quindi raccontano cosa e' l'app e come si installa, non cosa
+      # e' cambiato per chi l'ha scritta. (I commenti di questo workflow restano in italiano
+      # come il resto del progetto.)
+      # La prima parte distingue lo snapshot di `develop` dalla release di `master`: chi
+      # arriva qui deve capirlo subito.
       - name: Prepara le note della release
+        env:
+          APK_FILE: ${{ needs.versione.outputs.apk }}
+          IPA_FILE: ${{ needs.versione.outputs.ipa }}
+          SNAPSHOT: ${{ needs.versione.outputs.snapshot }}
         run: |
-          if [ "${{ needs.versione.outputs.snapshot }}" = "true" ]; then
+          if [ "$SNAPSHOT" = "true" ]; then
             printf '%s\n' \
-              "**Build di sviluppo** (\`-SNAPSHOT\`): e' lo stato attuale di \`develop\`, non una" \
-              "release. Non e' marcata come latest, quindi l'ultima versione stabile resta" \
-              "quella pubblicata da \`master\`." \
+              "> **Development build.** This is the current state of the \`develop\` branch," \
+              "> not a release: it is published as a pre-release, so the latest stable" \
+              "> version (built from \`master\`) is unaffected. Expect unfinished work -" \
+              "> features and appearance may still change." \
               "" > note.md
           else
             : > note.md
           fi
           printf '%s\n' \
-            "APK per il sideload: la build e' firmata con la debug key, quindi non" \
-            "va pubblicata sul Play Store." \
+            "A two-player life counter for Magic: The Gathering. Both mobile builds are" \
+            "attached to this release." \
             "" \
-            "Installazione: copiare l'APK sul telefono e aprirlo, oppure" \
-            "\`adb install -r MTG-Life-Counter-*.apk\`." \
+            "### Downloads" \
             "" \
-            "IPA per iOS **non firmato**: non si installa con un doppio clic. Serve" \
-            "Sideloadly o AltStore, che lo rifirmano con il proprio Apple ID (con un" \
-            "Apple ID gratuito la firma scade dopo 7 giorni)." >> note.md
+            "- **Android** - \`$APK_FILE\`, signed with the Android debug key" \
+            "- **iOS** - \`$IPA_FILE\`, unsigned" \
+            "" \
+            "### Installing on Android" \
+            "" \
+            "Open the APK on the device (allow installs from unknown sources when asked)," \
+            "or, with the phone connected over USB, run \`adb install -r $APK_FILE\`." \
+            "The package is signed with the Android debug key, so it is meant for" \
+            "sideloading: Google Play will not accept it, and every later build has to be" \
+            "installed the same way, otherwise Android refuses it as an update." \
+            "" \
+            "### Installing on iOS" \
+            "" \
+            "The IPA is not signed and will not install with a double click. Sideload it" \
+            "with Sideloadly or AltStore: they re-sign it with your own Apple ID, and a" \
+            "signature made with a free Apple ID expires after 7 days." \
+            "" \
+            "### Requirements" \
+            "" \
+            "Android 7.0 (API 24) or newer, or iOS 15 or newer. The app interface is in" \
+            "Italian." \
+            "" \
+            "Source code, build instructions and every other release:" \
+            "https://github.com/$GITHUB_REPOSITORY" >> note.md
           cat note.md
 
       # I nomi dei file vengono dal job `versione`: sono gli stessi che danno
@@ -300,12 +329,14 @@ jobs:
           titolo="${titolo//</&lt;}"
           titolo="${titolo//>/&gt;}"
 
+          # Il messaggio e' in inglese come le note della release (lo legge chi arriva
+          # sulla pagina delle release, non solo chi ha scritto l'app).
           # Lo snapshot di develop si annuncia come tale: chi legge il messaggio
           # deve sapere che non e' la release stabile.
           if [ "${{ needs.versione.outputs.snapshot }}" = "true" ]; then
-            tipo="Build di sviluppo: non e' una release, la stable resta quella di master."
+            tipo="Development build: not a release, the latest stable version is unchanged."
           else
-            tipo="Nuova release: APK Android e IPA iOS pronti."
+            tipo="New release: the Android APK and the iOS IPA are ready."
           fi
 
           testo="$(
@@ -313,9 +344,9 @@ jobs:
               "<b>MTG Life Counter $titolo</b>" \
               "$tipo" \
               "" \
-              "<a href=\"$apk_url\">APK Android: $APK_FILE</a>" \
-              "<a href=\"$ipa_url\">IPA iOS (non firmato): $IPA_FILE</a>" \
-              "<a href=\"$release_url\">Note e dettagli</a>"
+              "<a href=\"$apk_url\">Android APK: $APK_FILE</a>" \
+              "<a href=\"$ipa_url\">iOS IPA (unsigned): $IPA_FILE</a>" \
+              "<a href=\"$release_url\">What's in this release</a>"
           )"
 
           # Il testo lo codifica curl: niente escaping a mano nella query.
