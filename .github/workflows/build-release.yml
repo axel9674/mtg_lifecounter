@@ -105,9 +105,11 @@ jobs:
   # (Nexus/Artifactory), next to the GitHub Release. Same triggers as the release, so tags
   # only, stable and snapshot alike.
   #
-  # It is a job of its own for two reasons: it does not go through GitHub, so it must not be
-  # able to block or slow down the release, and it is the first thing to break while the
-  # server is being set up.
+  # It is a job of its own so that it can never hold the release back: `release` does not
+  # `need` it, the two start together and each one finishes on its own, and inside the called
+  # workflow every problem is a warning. A private repository that does not answer leaves the
+  # run green and the release published. It was the first thing to break while the server was
+  # being set up, and it has to stay the least important piece of the pipeline.
   publish-private:
     name: Publish to the private repository
     needs: [version, build, ios]

@@ -326,9 +326,19 @@ riusabili, uno per blocco di lavoro, con il nome di quello che fanno.
 (`repository.axelhome.me`), **oltre** alla release su GitHub. Stessi inneschi della release,
 quindi solo sui tag, stabili e snapshot.
 
-- E' un job a se' (e non uno step in piu' in `release.yml`) per due motivi: non passa da GitHub,
-  quindi non deve poter bloccare o rallentare la release, ed e' la prima cosa che si rompe
-  mentre il server viene messo su.
+- E' un job a se' (e non uno step in piu' in `release.yml`): il job `release` non lo ha fra i
+  `needs`, quindi i due partono **in parallelo** e ognuno finisce per conto suo. Un repository
+  privato che non risponde lascia il run verde e la release pubblicata: era la prima cosa che si
+  rompeva mentre il server veniva messo su, e deve restare il pezzo meno importante della
+  pipeline.
+- **Nessuno step di `publish-private.yml` puo' far fallire il run**: `Upload with curl` conta
+  gli errori invece di fermarsi (un file che non passa non tiene a terra gli altri), li segnala
+  con un `::warning::` e finisce comunque con `exit 0`; anche "nessun file da caricare" e' un
+  avviso e non un errore. E' la stessa scelta dell'analisi statica in `build-apk.yml`: un
+  fallimento tollerato lascia comunque l'annotazione rossa *Process completed with exit code 1*,
+  e un job che sembra sempre rotto non lo guarda piu' nessuno. Quando il server risponde, e solo
+  se un upload che non passa deve rendere rosso il run, si sostituisce `warning` con `error` e
+  `exit 0` con `exit 1`: la release esce comunque, perche' la pubblica un altro job.
 - L'upload e' un `PUT` con il file come corpo e basic auth, quello che si aspettano sia Nexus
   sia Artifactory su un repository generico: `PUT <url>/<repository>/<path>/<file>`, dove
   `url` si ferma al segmento dell'istanza (`/repository`, o `/artifactory`) e `path` e'
@@ -339,9 +349,6 @@ quindi solo sui tag, stabili e snapshot.
   `PRIVATE_REPO_NAME` senza toccare il file. Le credenziali sono i segreti
   `PRIVATE_REPO_USER` e `PRIVATE_REPO_PASSWORD`: se mancano l'upload viene **saltato** con un
   `::warning::` e la release resta valida.
-- Finche' il server non risponde lo step `Upload with curl` ha `continue-on-error: true`:
-  un errore non deve rendere rosso un run che ha gia' pubblicato la release.
-  **Va tolto quando il server risponde**, altrimenti gli upload potranno fallire in silenzio.
 - `curl` usa `--upload-file` (PUT in streaming, un APK da 40 MB non finisce in memoria),
   `--fail-with-body` (un errore HTTP diventa codice di uscita diverso da zero e la risposta del
   server — "401 Unauthorized", "400 Bad Request" — viene comunque stampata), `--retry 3` e
@@ -354,8 +361,9 @@ Due script in `build/` (cartella gitignored) provano la pipeline senza spingere 
 `python build\estrai_run.py` fa i controlli statici (YAML, `bash -n` su ogni blocco `run:`,
 `uses: ./...` che punta a file esistenti con `on: workflow_call`, input e segreti passati
 dichiarati, `inputs.X`/`secrets.X` mai dichiarati), `python build\prova_pipeline.py` esegue i
-blocchi `run:` con un `curl` finto e verifica etichette di versione, note, messaggio Telegram e
-indirizzi di upload. Il primo test vero resta il run su GitHub.
+blocchi `run:` con un `curl` finto (che puo' anche fallire, per provare il caso del server che
+non risponde) e verifica etichette di versione, note, messaggio Telegram e indirizzi di upload.
+Il primo test vero resta il run su GitHub.
 
 ### Come si pubblica una release
 

@@ -3,6 +3,12 @@
 #
 # Called by build-release.yml through `workflow_call`: it has no trigger of its own.
 #
+# This is a **side channel** and it must never hold the pipeline back: `release` does not
+# `need` this job, so the two run in parallel and the release is published whether the private
+# repository answers or not. On top of that, no step of this file can fail the run: whatever
+# goes wrong here comes out as a `::warning::` and the step exits 0 anyway (see
+# `Upload with curl` below).
+#
 # The upload is a `PUT` with the file as the body and HTTP basic auth, which is what both
 # Nexus and Artifactory expect on a generic repository:
 #
@@ -70,17 +76,21 @@ jobs:
           name: mtg-lifecounter-ipa
           path: dist
 
-      # While the server is being set up, a failure here must not turn red the run that has
-      # already published the release: the `continue-on-error` below takes care of it.
-      # **Remove it once the server answers**, otherwise the uploads will be able to fail in
-      # silence.
+      # A failure here must not turn red the run that has already published the release, and
+      # must not leave a red "Process completed with exit code 1" annotation on a green job
+      # either (the same noise the static analysis step of build-apk.yml used to make). So the
+      # step reports every problem with a `::warning::` and exits 0 in every case.
+      #
+      # **When the server answers**, and only if an upload that does not go through has to be
+      # a real failure, replace the `warning` with `error` and the final `exit 0` with
+      # `exit 1`: the release is published by its own job either way, so the pipeline is never
+      # held back by what happens here.
       #
       # `--upload-file` sends the file with a PUT and streams it, so a 40 MB APK is not read
       # into memory. `--fail-with-body` turns an HTTP error into a non-zero exit code and
       # still prints the answer of the server, which on a repository is where the reason is
       # written ("401 Unauthorized", "400 Bad Request", ...).
       - name: Upload with curl
-        continue-on-error: true
         env:
           REPO_URL: ${{ inputs.url }}
           REPO_NAME: ${{ inputs.repository }}
@@ -97,20 +107,31 @@ jobs:
           shopt -s nullglob
           files=("$DIST"/*.apk "$DIST"/*.ipa)
           if [ ${#files[@]} -eq 0 ]; then
-            echo "::error::no .apk or .ipa file in $DIST"
-            exit 1
+            echo "::warning::no .apk or .ipa file in $DIST: nothing to upload."
+            exit 0
           fi
 
           # Trailing slashes are dropped so the caller can write the URL with or without them.
           base="${REPO_URL%/}/${REPO_NAME}/${REPO_PATH%/}"
 
+          # The failures are counted instead of stopping the loop: one file that does not go
+          # through must not keep the others on the ground.
+          failed=0
           for file in "${files[@]}"; do
             name="$(basename "$file")"
             echo "Uploading $name to $base/"
-            curl -sS --fail-with-body --retry 3 --retry-connrefused \
+            if ! curl -sS --fail-with-body --retry 3 --retry-connrefused \
               --upload-file "$file" \
               --user "$REPO_USER:$REPO_PASSWORD" \
-              "$base/$name"
+              "$base/$name"; then
+              echo "::warning::upload of $name to $base/ failed"
+              failed=$((failed + 1))
+            fi
           done
+
+          if [ "$failed" -gt 0 ]; then
+            echo "::warning::$failed of ${#files[@]} file(s) did not reach $base/; the release on GitHub is not affected."
+            exit 0
+          fi
 
           echo "Uploaded ${#files[@]} file(s) to $base/"
