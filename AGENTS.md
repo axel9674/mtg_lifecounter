@@ -31,9 +31,10 @@ adb install -r build\app\outputs\flutter-apk\app-release.apk   # aggiorna l'APK 
 
 Per installare usare `adb install -r`, **non** `flutter install`: quest'ultimo disinstalla prima,
 e con l'app se ne va il salvataggio delle vite (i dati stanno nella cartella privata dell'app).
-`-r` lascia la cartella intatta e la sostituzione riesce perche' la firma (debug key) non cambia
-fra una build e l'altra. La release e' firmata con la debug key, quindi va bene per il sideload
-ma non si pubblica sul Play Store: e' un'app personale.
+`-r` lascia la cartella intatta e la sostituzione riesce perche' la firma non cambia mai: debug,
+release, build locale e build della pipeline usano **tutte la stessa chiave**, quella del progetto
+(vedi "La chiave di firma" qui sotto). E' una firma da sideload, non si pubblica sul Play Store:
+e' un'app personale.
 
 Per l'APK con lo stesso nome della release c'e' `tool/build_apk.ps1`:
 
@@ -53,6 +54,39 @@ e timer salvati. L'APK esce come
 `app-release.apk` che resta; con `-Snapshot` diventa
 `MTG-Life-Counter-<versione>-SNAPSHOT.apk`, come sui tag di `develop`. Il numero dopo il `+`
 **non** compare nel nome del file: resta nel `versionCode` dell'APK, dove serve ad Android.
+
+### La chiave di firma
+
+Una chiave sola per tutto, `android/app/signing/mtg-lifecounter.jks` (alias `mtg`, PKCS12,
+RSA 2048, valida fino al 2126), configurata in `android/app/build.gradle.kts` **sia su `debug`
+sia su `release`**. Stessa chiave in locale e in pipeline, cosi' l'APK della release aggiorna
+l'app installata da `flutter run` e viceversa.
+
+- La chiave **sta nel repo di proposito** (`!app/signing/mtg-lifecounter.jks` in
+  `android/.gitignore`): e' l'unico modo perche' le due firme siano identiche **per
+  costruzione**, senza segreti da configurare e senza dipendere da dove la macchina tiene il
+  `~/.android/debug.keystore` di sistema (qui `ANDROID_SDK_HOME` lo sposta su `D:`). Il repo e'
+  privato e l'app e' personale: la chiave non e' un segreto da proteggere, e' un identificativo
+  da non perdere.
+- **Non rigenerarla e non cambiarla mai.** Android rifiuta l'aggiornamento fra firme diverse
+  (Play Protect lo segnala come app non riconosciuta); l'unico rimedio e' disinstallare, e con
+  l'app se ne vanno vite, colori, veleni e timer. Rigenerarla costa un altro giro di disinstalla
+  e reinstalla su ogni telefono.
+- Una password sola, non due: PKCS12 non ha una password per la chiave, e' lo store a
+  custodirla. `keytool` accetta `-keypass` e lo **ignora in silenzio**, quindi una
+  `keyPassword` diversa da `storePassword` fa fallire la firma con *Given final block not
+  properly padded*.
+- La pipeline non deve fare niente al riguardo: trovando la chiave nel repo, la build della CI
+  firma da sola con la stessa chiave della build locale. Prima non era cosi': AGP generava un
+  debug keystore usa e getta sul runner, quindi ogni run produceva una firma diversa.
+- **Il passaggio a questa chiave e' stato una volta sola**: il primo APK firmato cosi' va
+  installato dopo aver disinstallato la versione precedente, **qualunque** chiave avesse, perche'
+  la chiave del progetto e' nuova e nessuna firma precedente combacia. Da li' in poi
+  `adb install -r` funziona e vite, colori e timer restano.
+- Un disco del telefono pieno fa fallire l'installazione con
+  `Requested internal only, but not enough space`: e' un problema **diverso** dalla firma ma si
+  presenta uguale (l'app non si aggiorna). Vale la pena guardare `adb shell df -h /data`
+  prima di dare la colpa alla firma.
 
 ## Regole operative
 
@@ -305,9 +339,9 @@ riusabili, uno per blocco di lavoro, con il nome di quello che fanno.
 - Le note della release (step `Prepare the release notes`, `body_path: note.md`) sono
   **in inglese**, come il messaggio Telegram: le legge chi arriva sulla pagina delle release dal
   di fuori, quindi raccontano cosa e' l'app, cosa c'e' negli allegati e come si installano
-  (APK firmato con la debug key, IPA non firmato da rifirmare con un Apple ID, requisiti di
-  sistema). Tutto quello che riguarda l'IPA compare **solo se l'IPA c'e'** (`IOS_RESULT`, cioe'
-  `needs.ios.result`): niente allegati promessi e non consegnati.
+  (APK firmato con la chiave del progetto, IPA non firmato da rifirmare con un Apple ID,
+  requisiti di sistema). Tutto quello che riguarda l'IPA compare **solo se l'IPA c'e'**
+  (`IOS_RESULT`, cioe' `needs.ios.result`): niente allegati promessi e non consegnati.
 - A release pubblicata lo step `Notify on Telegram` manda un messaggio con i link diretti
   all'APK (e all'IPA, quando c'e': `releases/download/<tag>/<file>`) e quello alle note. Richiede
   i segreti `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`: se mancano la notifica viene saltata con
@@ -406,6 +440,8 @@ il solo APK: l'IPA si costruisce solo per le release stabili.
   `publish-private.yml`. L'IPA si costruisce solo sui tag stabili.
 - `android/app/src/main/kotlin/.../MainActivity.kt` — il canale del suono di fine tempo.
 - `android/app/src/main/AndroidManifest.xml` — nome app (`MTG Life Counter`) e icona.
+- `android/app/signing/mtg-lifecounter.jks` — la chiave di firma unica (vedi "La chiave di
+  firma"): sta nel repo, non si rigenera.
 - `ios/Runner.xcodeproj/project.pbxproj` — progetto iOS (Swift Package Manager, bundle id,
   firma automatica, iOS 15).
 

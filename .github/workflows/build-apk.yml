@@ -67,8 +67,11 @@ jobs:
       - name: Static analysis (not blocking)
         run: flutter analyze lib || echo "::warning::flutter analyze reported findings, see the log of this step"
 
-      # The release is signed with the debug key (android/app/build.gradle.kts): fine for
-      # sideloading, not for publishing on the Play Store.
+      # The release is signed with the project's own key, the one committed at
+      # android/app/signing/mtg-lifecounter.jks and configured in android/app/build.gradle.kts
+      # for both build types: fine for sideloading, not for publishing on the Play Store. It
+      # used to be signed with the debug keystore AGP generated on this runner, which made the
+      # signature different on every run and broke the updates installed from a local build.
       - name: Build the release APK
         env:
           BUILD_NAME: ${{ inputs.build-name }}

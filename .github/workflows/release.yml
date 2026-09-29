@@ -107,7 +107,7 @@ jobs:
             "" \
             "### Downloads" \
             "" \
-            "- **Android** - \`$APK_FILE\`, signed with the Android debug key" >> note.md
+            "- **Android** - \`$APK_FILE\`, signed with the project's own key" >> note.md
 
           if [ "$has_ipa" = true ]; then
             printf '%s\n' "- **iOS** - \`$IPA_FILE\`, unsigned" >> note.md
@@ -119,9 +119,9 @@ jobs:
             "" \
             "Open the APK on the device (allow installs from unknown sources when asked)," \
             "or, with the phone connected over USB, run \`adb install -r $APK_FILE\`." \
-            "The package is signed with the Android debug key, so it is meant for" \
-            "sideloading: Google Play will not accept it, and every later build has to be" \
-            "installed the same way, otherwise Android refuses it as an update." >> note.md
+            "The package is signed with a key that belongs to the project, so it is meant for" \
+            "sideloading and Google Play will not accept it. Every build is signed with that" \
+            "same key, so a newer one installs as a normal update and keeps your saved games." >> note.md
 
           if [ "$has_ipa" = true ]; then
             printf '%s\n' \
