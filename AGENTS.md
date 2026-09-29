@@ -110,6 +110,22 @@ e timer salvati. L'APK esce come
   `android/.../MainActivity.kt` (canale `mtg_lifecounter/alarm`, `STREAM_ALARM`), perche' non
   deve dipendere dal volume dei media; altrove si ripiega su `SystemSound.alert`. Suona una
   volta sola, e toccare il timer (o azzerarlo) la zittisce.
+- Segnalini veleno (`_PoisonCounter` dentro `_FloatingPoison`): una pillola per zona,
+  **fluttuante** come il timer, quindi accendere i veleni non rimpicciolisce il contatore delle
+  vite. Sta in un angolo **opposto** a quello del timer (che occupa il centro del bordo esterno):
+  in verticale la zona in alto la tiene in basso a sinistra e quella in basso in alto a destra
+  (speculari rispetto alla linea di mezzo, dove non c'e' nessuna barra di sistema), in
+  orizzontale finiscono agli angoli opposti dello schermo e li' il `MediaQuery.paddingOf` conta
+  (`screenInsets`). Tocco = **+1**, pressione lunga = **-1** (primo segnalino subito, poi
+  140 ms come la vita): i veleni si mettono quando si colpisce, quello che si corregge sono gli
+  errori. Vanno da zero a `kLethalPoison` (**10**) e a dieci si **perde senza passare dalle
+  vite**: `_gameOutcome` guarda anche i veleni, la pillola si accende di verde (verde anche
+  l'icona, nera la scritta su fondo chiaro) e la zona mostra il cartello VINCE/PERDE. Si
+  accendono dalla voce del menu (icona virus, tooltip "Mostra/Nascondi i segnalini veleno",
+  chiave `poisonVisible`) e **all'inizio stanno spenti**: chi non gioca infect non se li trova
+  sullo schermo. Spegnerli **non** azzera i valori: chi e' a dieci resta avvelenato a morte
+  anche a pillole nascoste. I veleni tornano a zero con "Nuova partita" (`resetLife`), non dal
+  menu dei veleni.
 - La voce "Nuova partita" (icona refresh) non apre nessun popup: mostra `_LifePresetPicker`,
   cioe' i tre pulsanti 20/30/40 con sopra la scritta "Seleziona i Punti Vita iniziali".
   In **verticale** il picker e' attaccato sopra la voce del menu (una `Column` dentro
@@ -137,12 +153,12 @@ e timer salvati. L'APK esce come
   build delle release); se la lettura fallisce o torna vuota (sul web `version.json` non c'e')
   la scritta non compare. E' l'unica dipendenza oltre a quelle del contatore.
 - Persistenza in `shared_preferences` con chiavi `player1Life`, `player2Life`, `player1Color`,
-  `player2Color`, `flipFirstLife`, `opponentLifeVisible`, `timerOn`, `timerMinutes`,
-  `timerSeconds`, `timerDeadline`, `startingLife`.
+  `player2Color`, `player1Poison`, `player2Poison`, `flipFirstLife`, `opponentLifeVisible`,
+  `poisonVisible`, `timerOn`, `timerMinutes`, `timerSeconds`, `timerDeadline`, `startingLife`.
   `_restoreGame()` in `initState`, `_saveGame()` dopo ogni modifica, flag `_touched` per non
   sovrascrivere quello che l'utente ha gia' fatto. `SharedPreferences` e' sempre in `try/catch`.
 - Costanti notevoli in cima al file: `kStartingLife`, `kMinStartingLife`, `kMaxStartingLife`,
-  `kDefaultPanelColor`, `kPlayerColors`,
+  `kLethalPoison`, `kDefaultPanelColor`, `kPlayerColors`,
   `kNumberFontSize`, `kNumberBoxWidth`, `kSignBoxWidth`, `kCounterGap`, `kLifeCounterScale`,
   `kCounterSideInset`, `kComboWindow`, `kComboScale`, `kNumberFontFamily`.
 

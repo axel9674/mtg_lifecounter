@@ -347,12 +347,23 @@ const int kStartingLife = 20;
 const int kMinStartingLife = 1;
 const int kMaxStartingLife = 999;
 
+/// Segnalini veleno che fanno perdere la partita.
+///
+/// E' una condizione di sconfitta diversa dalle vite: i segnalini si mettono sul
+/// giocatore (infect, poisonous, toxic) e a dieci quel giocatore perde. A
+/// differenza delle vite non si tolgono, quindi la pillola si ferma qui.
+const int kLethalPoison = 10;
+
 /// Chiavi con cui la partita in corso (vite e colori delle due zone) viene
 /// ricordata fra un avvio e l'altro, ricaricamento della pagina compreso.
 const String _kPlayer1LifeKey = 'player1Life';
 const String _kPlayer2LifeKey = 'player2Life';
 const String _kPlayer1ColorKey = 'player1Color';
 const String _kPlayer2ColorKey = 'player2Color';
+
+/// Segnalini veleno di ciascun giocatore, da zero a [kLethalPoison].
+const String _kPlayer1PoisonKey = 'player1Poison';
+const String _kPlayer2PoisonKey = 'player2Poison';
 
 /// Vite con cui e' cominciata l'ultima nuova partita: la voce "Nuova partita"
 /// del menu si riapre su questa quantita'.
@@ -367,6 +378,11 @@ const String _kFlipFirstLifeKey = 'flipFirstLife';
 /// con le due vite nello stesso verso ognuno legge il numero dell'altro
 /// capovolto, quindi non serve a niente.
 const String _kOpponentLifeVisibleKey = 'opponentLifeVisible';
+
+/// Se i segnalini veleno si vedono accanto al contatore delle vite. La
+/// maggior parte delle partite non li usa, quindi restano spenti finche' non si
+/// accendono dalla voce del menu.
+const String _kPoisonVisibleKey = 'poisonVisible';
 
 /// Impostazioni del timer di partita: se e' acceso, quanto dura e quanto tempo
 /// resta. Il timer fermo resta fermo anche riaprendo l'app: a farlo ripartire
@@ -461,6 +477,16 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   /// vite guardano in versi opposti. Si puo' nascondere: e' un'informazione in
   /// piu' che non tutti vogliono avere sotto gli occhi per tutta la partita.
   bool _opponentLifeVisible = true;
+
+  /// Segnalini veleno di ciascun giocatore, da zero a [kLethalPoison]. A dieci
+  /// il giocatore e' avvelenato a morte e la partita e' persa: e' una
+  /// condizione di sconfitta diversa dalle vite, quindi i due valori vivono
+  /// accanto e non al posto loro.
+  int _player1Poison = 0;
+  int _player2Poison = 0;
+
+  /// True se i segnalini veleno si vedono accanto al contatore delle vite.
+  bool _poisonVisible = false;
 
   /// Timer di partita: se e' acceso, quanto dura e quanto tempo resta.
   /// Il timer non parte da solo: resta fermo finche' non si tocca il suo box.
@@ -606,6 +632,7 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       );
       _flipFirstLife = prefs.getBool(_kFlipFirstLifeKey) ?? false;
       _opponentLifeVisible = prefs.getBool(_kOpponentLifeVisibleKey) ?? true;
+      _poisonVisible = prefs.getBool(_kPoisonVisibleKey) ?? false;
     });
     if (running) {
       _startTicker();
@@ -618,6 +645,14 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     setState(() {
       player1Life = prefs.getInt(_kPlayer1LifeKey) ?? _startingLife;
       player2Life = prefs.getInt(_kPlayer2LifeKey) ?? _startingLife;
+      _player1Poison = (prefs.getInt(_kPlayer1PoisonKey) ?? 0).clamp(
+        0,
+        kLethalPoison,
+      );
+      _player2Poison = (prefs.getInt(_kPlayer2PoisonKey) ?? 0).clamp(
+        0,
+        kLethalPoison,
+      );
       if (color1 != null) _player1Color = color1;
       if (color2 != null) _player2Color = color2;
     });
@@ -634,8 +669,11 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       await prefs.setInt(_kPlayer2LifeKey, player2Life);
       await prefs.setInt(_kPlayer1ColorKey, _player1Color.toARGB32());
       await prefs.setInt(_kPlayer2ColorKey, _player2Color.toARGB32());
+      await prefs.setInt(_kPlayer1PoisonKey, _player1Poison);
+      await prefs.setInt(_kPlayer2PoisonKey, _player2Poison);
       await prefs.setBool(_kFlipFirstLifeKey, _flipFirstLife);
       await prefs.setBool(_kOpponentLifeVisibleKey, _opponentLifeVisible);
+      await prefs.setBool(_kPoisonVisibleKey, _poisonVisible);
       await prefs.setBool(_kTimerOnKey, _timerOn);
       await prefs.setInt(_kTimerMinutesKey, _timerMinutes);
       await prefs.setInt(_kStartingLifeKey, _startingLife);
@@ -664,9 +702,30 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     unawaited(_saveGame());
   }
 
+  /// Aggiunge o toglie un segnalino veleno a un giocatore.
+  ///
+  /// I veleni vanno da zero a [kLethalPoison]: a dieci la partita e' persa,
+  /// quindi oltre non c'e' niente da contare. Non si tolgono con le carte, ma
+  /// si correggono a mano (pressione lunga sulla pillola): i segnalini si
+  /// mettono quando si colpisce, e capita di sbagliare.
+  void updatePoison(int player, int delta) {
+    _touched = true;
+    setState(() {
+      if (player == 1) {
+        _player1Poison = (_player1Poison + delta).clamp(0, kLethalPoison);
+      } else {
+        _player2Poison = (_player2Poison + delta).clamp(0, kLethalPoison);
+      }
+    });
+    unawaited(_saveGame());
+  }
+
   /// Nuova partita: le due vite tornano a [life], la quantita' scelta dal menu
   /// (che resta ricordata per le partite successive). Il timer non viene
   /// toccato: si azzera solo dal suo box (long press) o dalle impostazioni.
+  ///
+  /// I segnalini veleno invece tornano a zero: una partita nuova comincia
+  /// senza veleni, e a dieci si perde, quindi non avrebbe senso trascinarseli.
   void resetLife(int life) {
     _touched = true;
     final target = life.clamp(kMinStartingLife, kMaxStartingLife);
@@ -674,6 +733,8 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       _startingLife = target;
       player1Life = target;
       player2Life = target;
+      _player1Poison = 0;
+      _player2Poison = 0;
     });
     unawaited(_saveGame());
   }
@@ -829,6 +890,16 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   /// sempre le stesse voci nella stessa posizione.
   void toggleOpponentLife() {
     setState(() => _opponentLifeVisible = !_opponentLifeVisible);
+    unawaited(_saveGame());
+  }
+
+  /// Mostra o nasconde i segnalini veleno in tutte e due le zone.
+  ///
+  /// I valori restano: spegnere le pillole non azzera i veleni, e chi e' a
+  /// dieci resta avvelenato a morte (e quindi ha perso) anche a pillole
+  /// nascoste. Per rimetterli in gioco c'e' la voce "Nuova partita".
+  void togglePoison() {
+    setState(() => _poisonVisible = !_poisonVisible);
     unawaited(_saveGame());
   }
 
@@ -1042,13 +1113,27 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
         tooltip: 'Timer di partita',
         onTap: () => runMenuAction(showTimerSetup),
       ),
+      // I segnalini veleno si accendono da qui: la maggior parte delle partite
+      // non li usa, e la pillola resta cosi' fuori dai piedi. La scelta resta
+      // ricordata fra una partita e l'altra.
+      RadialMenuItem(
+        icon: Icons.coronavirus,
+        tooltip: _poisonVisible
+            ? 'Nascondi i segnalini veleno'
+            : 'Mostra i segnalini veleno',
+        onTap: () => runMenuAction(togglePoison),
+      ),
     ];
   }
 
   /// Chi ha vinto, se la partita e' finita.
+  ///
+  /// Si perde in due modi: le vite a zero (o sotto) oppure [kLethalPoison]
+  /// segnalini veleno. Se sono fuori tutti e due (o tutte e due le condizioni
+  /// toccano lo stesso giocatore) non c'e' un vincitore.
   GameOutcome get _gameOutcome {
-    final out1 = player1Life <= 0;
-    final out2 = player2Life <= 0;
+    final out1 = player1Life <= 0 || _player1Poison >= kLethalPoison;
+    final out2 = player2Life <= 0 || _player2Poison >= kLethalPoison;
     if (out1 == out2) return GameOutcome.none;
     return out1 ? GameOutcome.player2 : GameOutcome.player1;
   }
@@ -1104,7 +1189,9 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   ///   verticale, ogni giocatore ha il timer sotto le cifre che legge.
   ///
   /// Il box fluttua sopra le zone: non toglie spazio al contatore, che resta
-  /// grande come quando il timer e' spento.
+  /// grande come quando il timer e' spento. Lo stesso vale per le pillole dei
+  /// segnalini veleno, che stanno in un angolo libero di ogni zona e compaiono
+  /// solo quando si accendono dal menu.
   Widget _buildLifeView() {
     final outcome = _gameOutcome;
     final wide = _isWide(context);
@@ -1154,7 +1241,7 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       ),
     );
 
-    if (!_timerOn) return zones;
+    if (!_timerOn && !_poisonVisible) return zones;
 
     // Il box sta sopra la zona, non accanto: accendere il timer non cambia di
     // un pixel il contatore delle vite. Il verso e' quello delle cifre che gli
@@ -1201,13 +1288,79 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
             ],
           );
 
+    // Le pillole dei segnalini veleno stanno in un angolo libero di ogni zona:
+    // il timer occupa gia' il centro del bordo esterno, quindi la pillola va sul
+    // bordo opposto e dalla parte del bordo dello schermo, dove il box del timer
+    // non arriva mai. In verticale le due pillole finiscono vicine alla linea di
+    // mezzo (quella della zona in alto in basso a sinistra, quella in basso in
+    // alto a destra: speculari), in orizzontale agli angoli opposti dello
+    // schermo. In verticale il bordo su cui appoggiano non e' un bordo dello
+    // schermo, quindi non c'e' nessuna barra di sistema da lasciare libera.
+    final insets = MediaQuery.paddingOf(context);
+    Widget poison({
+      required Alignment alignment,
+      required int quarterTurns,
+      required int value,
+      required int player,
+      required EdgeInsets screenInsets,
+    }) => _FloatingPoison(
+      alignment: alignment,
+      insets: screenInsets,
+      child: _PoisonCounter(
+        value: value,
+        quarterTurns: quarterTurns,
+        onIncrease: () => updatePoison(player, 1),
+        onDecrease: () => updatePoison(player, -1),
+      ),
+    );
+
+    final firstPoison = poison(
+      alignment: Alignment.bottomLeft,
+      quarterTurns: flipped ? 2 : 0,
+      value: _player1Poison,
+      player: 1,
+      screenInsets: EdgeInsets.only(
+        left: insets.left,
+        bottom: wide ? insets.bottom : 0,
+      ),
+    );
+    final secondPoison = poison(
+      alignment: Alignment.topRight,
+      quarterTurns: 0,
+      value: _player2Poison,
+      player: 2,
+      screenInsets: EdgeInsets.only(
+        right: insets.right,
+        top: wide ? insets.top : 0,
+      ),
+    );
+
+    // Come i timer, le due pillole ricalcano la disposizione delle zone: una
+    // per meta' schermo, cosi' l'angolo e' quello della propria zona.
+    final poisons = wide
+        ? Row(
+            children: [
+              Expanded(child: firstPoison),
+              const SizedBox(width: _ZoneDivider._thickness),
+              Expanded(child: secondPoison),
+            ],
+          )
+        : Column(
+            children: [
+              Expanded(child: firstPoison),
+              Expanded(child: secondPoison),
+            ],
+          );
+
     return Stack(
       children: [
         Positioned.fill(child: zones),
         // Finche' le due vite guardano nello stesso verso basta il primo box:
         // da tutte e due le parti del tavolo si legge lo stesso numero, e sta
         // in cima come le cifre.
-        Positioned.fill(child: flipped ? timers : firstTimer),
+        if (_timerOn) Positioned.fill(child: flipped ? timers : firstTimer),
+        // Una pillola per zona, ognuna nel verso di chi la legge.
+        if (_poisonVisible) Positioned.fill(child: poisons),
       ],
     );
   }
@@ -2871,6 +3024,243 @@ class _FloatingTimer extends StatelessWidget {
           bottom: atTop ? 0 : insets.bottom + _gap,
         ),
         child: child,
+      ),
+    );
+  }
+}
+
+/// Pillola dei segnalini veleno appoggiata in un angolo della propria zona.
+///
+/// Come il timer e' fluttuante: sta sopra la zona delle vite in uno [Stack] e
+/// non le toglie spazio, quindi accendere i veleni non rimpicciolisce il
+/// contatore. Tutto intorno alla pillola la zona risponde come sempre: i tocchi
+/// li prende solo lei.
+///
+/// L'angolo lo sceglie chi la costruisce, e non e' quello del timer: la pillola
+/// va sul bordo opposto, dove il box del timer (che sta al centro del bordo
+/// esterno) non arriva mai.
+class _FloatingPoison extends StatelessWidget {
+  /// Dove appoggiare la pillola dentro lo spazio che le viene dato: chi la
+  /// costruisce le da' una meta' schermo, cosi' l'angolo e' quello della
+  /// propria zona e non dello schermo.
+  final Alignment alignment;
+
+  /// Spazio da lasciare sui bordi che toccano lo schermo, barre di sistema
+  /// comprese. In verticale la pillola appoggia sulla linea di mezzo, dove non
+  /// c'e' nessuna barra: li' questo spazio vale zero.
+  final EdgeInsets insets;
+
+  final Widget child;
+
+  const _FloatingPoison({
+    required this.alignment,
+    required this.insets,
+    required this.child,
+  });
+
+  /// Stacco dal bordo: la pillola non deve sembrare incollata alla linea di
+  /// mezzo ne' al bordo dello schermo.
+  static const double _gap = kNumberFontSize * 0.04;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: alignment,
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: insets.left + _gap,
+          top: insets.top + _gap,
+          right: insets.right + _gap,
+          bottom: insets.bottom + _gap,
+        ),
+        child: child,
+      ),
+    );
+  }
+}
+
+/// Contatore dei segnalini veleno di una zona: una pillola che fluttua sopra il
+/// contatore delle vite, in un angolo libero.
+///
+/// Un tocco aggiunge un segnalino, la pressione lunga lo toglie e, tenendo
+/// premuto, continua a toglierli. E' il verso in cui i veleni si usano al
+/// tavolo: si mettono uno per volta quando si colpisce, quindi il gesto piu'
+/// comodo e' quello che aggiunge, e quello che si corregge sono gli errori.
+///
+/// I veleni vanno da zero a [kLethalPoison] e a dieci la partita e' persa, senza
+/// passare dalle vite: la pillola si accende per dirlo (vedi
+/// [_LifeCounterHomeState._gameOutcome]). Come gli altri box fluttuanti e'
+/// ruotata nel verso delle cifre della zona a cui appartiene, cosi' ognuno la
+/// legge dalla propria parte del tavolo.
+class _PoisonCounter extends StatefulWidget {
+  final int value;
+
+  /// Quarti di giro della rotazione: 0 per la zona dritta, 2 per quella girata
+  /// (mezzo giro).
+  final int quarterTurns;
+
+  final VoidCallback onIncrease;
+  final VoidCallback onDecrease;
+
+  const _PoisonCounter({
+    required this.value,
+    required this.onIncrease,
+    required this.onDecrease,
+    this.quarterTurns = 0,
+  });
+
+  /// Dimensione delle cifre dei segnalini: piu' piccola della vita (si guarda
+  /// di rado), ma non minuscola, perche' quando si guarda e' perche' conta.
+  static const double _fontSize = kNumberFontSize * 0.12;
+
+  /// Larghezza fissa delle cifre: due cifre ("10") entrano comode e la pillola
+  /// non cambia misura passando da una cifra a due.
+  static const double _numberWidth = kNumberFontSize * 0.1;
+
+  /// Misure interne, ricavate dalla dimensione delle cifre. L'altezza e' quella
+  /// del box del timer: sono due pillole della stessa famiglia.
+  static const double _height = kNumberFontSize * 0.17;
+  static const double _iconSize = _fontSize * 0.62;
+  static const double _iconGap = _fontSize * 0.2;
+  static const double _padding = _fontSize * 0.3;
+
+  /// Pausa fra due passi mentre il dito resta premuto: come per la vita il
+  /// primo segnalino si toglie subito, poi la pillola va da sola.
+  static const Duration _holdStep = Duration(milliseconds: 140);
+
+  /// Pillola spenta: lo stesso scuro degli altri box fluttuanti, cosi' si legge
+  /// sopra le cifre senza nasconderle.
+  static const Color _idleBackground = Color(0xC0000000);
+
+  /// Pillola avvelenata a morte ([kLethalPoison] segnalini): si accende di
+  /// verde, che e' il colore con cui i veleni si riconoscono al tavolo.
+  static const Color _lethalBackground = Color(0xF2AEEA00);
+
+  static const Color _foreground = Color(0xFFFFFFFF);
+  static const Color _lethalForeground = Color(0xFF000000);
+  static const Color _iconColor = Color(0xFFAEEA00);
+
+  @override
+  State<_PoisonCounter> createState() => _PoisonCounterState();
+}
+
+class _PoisonCounterState extends State<_PoisonCounter> {
+  /// True mentre il dito e' sulla pillola: il fondo si avvicina al colore
+  /// dell'icona, come nei pulsanti del menu. La pillola non ha meta' (il tocco
+  /// fa sempre la stessa cosa), quindi si accende tutta.
+  bool _pressed = false;
+
+  Timer? _holdTimer;
+
+  /// Quanto si avvicina il fondo al colore dell'icona mentre e' premuta.
+  static const double _pressedMix = 0.22;
+
+  @override
+  void dispose() {
+    _holdTimer?.cancel();
+    super.dispose();
+  }
+
+  void _setPressed(bool value) {
+    if (_pressed == value) return;
+    setState(() => _pressed = value);
+  }
+
+  /// Il dito si e' fermato sulla pillola: si toglie subito un segnalino e poi
+  /// si continua finche' il dito resta li'.
+  void _startHold() {
+    _setPressed(true);
+    widget.onDecrease();
+    // Un colpo secco avvisa che la ripetizione e' partita: da li' in poi i
+    // segnalini calano da soli e non serve guardare lo schermo.
+    unawaited(HapticFeedback.selectionClick());
+    _holdTimer?.cancel();
+    _holdTimer = Timer.periodic(
+      _PoisonCounter._holdStep,
+      (_) => widget.onDecrease(),
+    );
+  }
+
+  void _stopHold() {
+    _holdTimer?.cancel();
+    _holdTimer = null;
+    _setPressed(false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lethal = widget.value >= kLethalPoison;
+    final background = lethal
+        ? _PoisonCounter._lethalBackground
+        : _pressed
+        ? Color.lerp(
+            _PoisonCounter._idleBackground,
+            _PoisonCounter._foreground,
+            _pressedMix,
+          )!
+        : _PoisonCounter._idleBackground;
+    final foreground = lethal
+        ? _PoisonCounter._lethalForeground
+        : _PoisonCounter._foreground;
+
+    return RotatedBox(
+      quarterTurns: widget.quarterTurns,
+      child: Tooltip(
+        message:
+            'Veleno: ${widget.value}/$kLethalPoison'
+            ' (tocco: +1, tieni premuto: -1)',
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (_) => _setPressed(true),
+          onTapUp: (_) {
+            _setPressed(false);
+            widget.onIncrease();
+          },
+          onTapCancel: () => _setPressed(false),
+          onLongPressStart: (_) => _startHold(),
+          onLongPressEnd: (_) => _stopHold(),
+          onLongPressCancel: _stopHold,
+          child: Container(
+            height: _PoisonCounter._height,
+            padding: const EdgeInsets.symmetric(
+              horizontal: _PoisonCounter._padding,
+            ),
+            decoration: BoxDecoration(
+              color: background,
+              borderRadius: BorderRadius.circular(_PoisonCounter._height / 2),
+              // Stessa ombra del timer: la pillola e' appoggiata sopra il
+              // contatore, non e' una parte del pannello.
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x66000000),
+                  blurRadius: 14,
+                  offset: Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.coronavirus,
+                  size: _PoisonCounter._iconSize,
+                  // A veleno letale la pillola e' chiara, quindi l'icona prende
+                  // il colore della scritta e non il verde.
+                  color: lethal ? foreground : _PoisonCounter._iconColor,
+                ),
+                const SizedBox(width: _PoisonCounter._iconGap),
+                FixedWidthNumber(
+                  '${widget.value}',
+                  width: _PoisonCounter._numberWidth,
+                  style: appNumberStyle(
+                    fontSize: _PoisonCounter._fontSize,
+                    color: foreground,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
