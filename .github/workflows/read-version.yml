@@ -1,0 +1,104 @@
+# Reads the version of the app, once, for the whole pipeline.
+#
+# It is a workflow of its own so that the version is read in exactly one place: the job below
+# writes it out, `on.workflow_call` hands it back to build-release.yml, and from there every
+# other job gets the same label and the same build number. APK, IPA and file names cannot
+# disagree.
+#
+# Called by build-release.yml through `workflow_call`: it has no trigger of its own.
+name: Version
+
+on:
+  workflow_call:
+    outputs:
+      name:
+        description: Version name from pubspec.yaml, without the build number (e.g. `1.0.4`).
+        value: ${{ jobs.version.outputs.name }}
+      number:
+        description: >-
+          Build number from pubspec.yaml, after the `+` (e.g. `5`). It is the Android
+          versionCode and must never go down.
+        value: ${{ jobs.version.outputs.number }}
+      label:
+        description: Release label, taken from the tag when there is one (e.g. `1.0.4-SNAPSHOT`).
+        value: ${{ jobs.version.outputs.label }}
+      snapshot:
+        description: "`true` when the tag carries the `-SNAPSHOT` suffix, i.e. it is a build of `develop`."
+        value: ${{ jobs.version.outputs.snapshot }}
+      apk:
+        description: File name of the APK attached to the release.
+        value: ${{ jobs.version.outputs.apk }}
+      ipa:
+        description: File name of the IPA attached to the release.
+        value: ${{ jobs.version.outputs.ipa }}
+
+# The job reads a file and nothing else.
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Read pubspec.yaml
+    runs-on: ubuntu-latest
+    outputs:
+      name: ${{ steps.read.outputs.name }}
+      number: ${{ steps.read.outputs.number }}
+      label: ${{ steps.read.outputs.label }}
+      snapshot: ${{ steps.read.outputs.snapshot }}
+      apk: ${{ steps.read.outputs.apk }}
+      ipa: ${{ steps.read.outputs.ipa }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The version lives in `version:` of pubspec.yaml (`name+number`) and is the only
+      # source: `flutter run` and `tool/build_apk.ps1` read it too, so the files built here
+      # and the ones built locally always carry the same label and the same build number.
+      #
+      # The tag only provides the label of the release. The build number must never go down:
+      # Android refuses the installation with INSTALL_FAILED_VERSION_DOWNGRADE, and
+      # `flutter run` reacts to that refusal by uninstalling the previous version, taking the
+      # saved life totals away with it.
+      #
+      # On the development branch the tags carry `-SNAPSHOT` (v1.0.4-SNAPSHOT): it is the same
+      # version as pubspec.yaml, just not published yet. The suffix ends up in the release
+      # label and in the file names, **never** in `--build-name`: iOS
+      # (CFBundleShortVersionString) accepts digits and dots only.
+      - name: Read the version
+        id: read
+        shell: bash
+        run: |
+          pubspec="$(sed -n 's/^version: *//p' pubspec.yaml | head -n1)"
+          name="${pubspec%%+*}"
+          number="${pubspec##*+}"
+          if [[ ! "$number" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::version: '$pubspec' is not in the name+number form (e.g. 1.0.2+3)"
+            exit 1
+          fi
+
+          label="$name"
+          snapshot=false
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF_NAME#v}"
+            # The comparison ignores the suffix: v1.0.4-SNAPSHOT matches the 1.0.4 of pubspec.yaml.
+            if [[ "${tag%-SNAPSHOT}" != "$name" ]]; then
+              echo "::warning::tag $GITHUB_REF_NAME does not match version: '$pubspec' in pubspec.yaml"
+            fi
+            label="$tag"
+            if [[ "$tag" == *-SNAPSHOT ]]; then
+              snapshot=true
+            fi
+          fi
+
+          # The build number is **not** in the file names on purpose: it stays in the
+          # `versionCode` of the APK (and in the log line below), where it belongs.
+          {
+            echo "name=$name"
+            echo "number=$number"
+            echo "label=$label"
+            echo "snapshot=$snapshot"
+            echo "apk=MTG-Life-Counter-$label.apk"
+            echo "ipa=MTG-Life-Counter-$label.ipa"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Label $label (build $number, from pubspec $name+$number)"

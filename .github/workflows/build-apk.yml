@@ -1,0 +1,98 @@
+# Builds the release APK of Android, stages it in `dist/` under the name of the release and
+# leaves it to the rest of the pipeline as the artifact `mtg-lifecounter-apk`.
+#
+# Called by build-release.yml through `workflow_call`: it has no trigger of its own.
+name: Build the APK
+
+on:
+  workflow_call:
+    inputs:
+      build-name:
+        description: Version name passed to `--build-name` (no `-SNAPSHOT` suffix).
+        required: true
+        type: string
+      build-number:
+        description: Build number passed to `--build-number` (the Android versionCode).
+        required: true
+        type: string
+      file-name:
+        description: Name of the file staged in `dist/`, e.g. `MTG-Life-Counter-1.0.4.apk`.
+        required: true
+        type: string
+
+env:
+  # The pin, to be bumped together with the local SDK (`flutter --version`) and with the same
+  # line in build-ipa.yml. The value cannot come from the caller: a reusable workflow can only
+  # receive `inputs`, and the `env` context is not allowed in the `with:` of the call.
+  FLUTTER_VERSION: 3.47.4
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    name: flutter build apk --release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The action is pinned to its moving major tag (vN) and updated by hand. From v5/v6 on
+      # these actions run on Node 24 and need a runner >= 2.327.1: `ubuntu-latest` and
+      # `macos-latest` are fine, a self-hosted runner would not be.
+      - name: Java 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # `subosito/flutter-action` is the only one still on the v2 line.
+      - name: Flutter ${{ env.FLUTTER_VERSION }}
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Fetch the dependencies
+        run: flutter pub get
+
+      # `flutter analyze` exits with code 1 because of the 12 pre-existing `info` lints in
+      # lib/main.dart, so here it is informative only and must not fail the build.
+      #
+      # `|| echo` instead of `continue-on-error`: a step allowed to fail still leaves a red
+      # "Process completed with exit code 1" annotation on the job, and a job that always
+      # looks broken stops being read. This way the exit code stays zero and what is left is
+      # an orange warning that says where to look.
+      - name: Static analysis (not blocking)
+        run: flutter analyze lib || echo "::warning::flutter analyze reported findings, see the log of this step"
+
+      # The release is signed with the project's own key, the one committed at
+      # android/app/signing/mtg-lifecounter.jks and configured in android/app/build.gradle.kts
+      # for both build types: fine for sideloading, not for publishing on the Play Store. It
+      # used to be signed with the debug keystore AGP generated on this runner, which made the
+      # signature different on every run and broke the updates installed from a local build.
+      - name: Build the release APK
+        env:
+          BUILD_NAME: ${{ inputs.build-name }}
+          BUILD_NUMBER: ${{ inputs.build-number }}
+        run: |
+          flutter build apk --release \
+            --build-name "$BUILD_NAME" \
+            --build-number "$BUILD_NUMBER"
+
+      # `dist/<file>` is the very name `tool/build_apk.ps1` gives to the same commit, so the
+      # local APK and the released one cannot be told apart by name.
+      - name: Stage the APK in dist/
+        env:
+          FILE_NAME: ${{ inputs.file-name }}
+        run: |
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-release.apk "dist/$FILE_NAME"
+
+      - name: Upload the APK artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: mtg-lifecounter-apk
+          path: dist/*.apk
+          if-no-files-found: error

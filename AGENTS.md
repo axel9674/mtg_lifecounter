@@ -31,9 +31,10 @@ adb install -r build\app\outputs\flutter-apk\app-release.apk   # aggiorna l'APK 
 
 Per installare usare `adb install -r`, **non** `flutter install`: quest'ultimo disinstalla prima,
 e con l'app se ne va il salvataggio delle vite (i dati stanno nella cartella privata dell'app).
-`-r` lascia la cartella intatta e la sostituzione riesce perche' la firma (debug key) non cambia
-fra una build e l'altra. La release e' firmata con la debug key, quindi va bene per il sideload
-ma non si pubblica sul Play Store: e' un'app personale.
+`-r` lascia la cartella intatta e la sostituzione riesce perche' la firma non cambia mai: debug,
+release, build locale e build della pipeline usano **tutte la stessa chiave**, quella del progetto
+(vedi "La chiave di firma" qui sotto). E' una firma da sideload, non si pubblica sul Play Store:
+e' un'app personale.
 
 Per l'APK con lo stesso nome della release c'e' `tool/build_apk.ps1`:
 
@@ -49,9 +50,43 @@ dicono cosi' sempre la stessa cosa. Il numero dopo il `+` e' il `versionCode` di
 deve mai calare**: se cala, `adb install -r` fallisce con `INSTALL_FAILED_VERSION_DOWNGRADE` e
 `flutter run`, che dopo il fallimento disinstalla la versione vecchia, si porta via vite, colori
 e timer salvati. L'APK esce come
-`build\app\outputs\flutter-apk\MTG-Life-Counter-<versione>-build<numero>.apk`, accanto a
+`build\app\outputs\flutter-apk\MTG-Life-Counter-<versione>.apk`, accanto a
 `app-release.apk` che resta; con `-Snapshot` diventa
-`MTG-Life-Counter-<versione>-SNAPSHOT-build<numero>.apk`, come sui tag di `develop`.
+`MTG-Life-Counter-<versione>-SNAPSHOT.apk`, come sui tag di `develop`. Il numero dopo il `+`
+**non** compare nel nome del file: resta nel `versionCode` dell'APK, dove serve ad Android.
+
+### La chiave di firma
+
+Una chiave sola per tutto, `android/app/signing/mtg-lifecounter.jks` (alias `mtg`, PKCS12,
+RSA 2048, valida fino al 2126), configurata in `android/app/build.gradle.kts` **sia su `debug`
+sia su `release`**. Stessa chiave in locale e in pipeline, cosi' l'APK della release aggiorna
+l'app installata da `flutter run` e viceversa.
+
+- La chiave **sta nel repo di proposito** (`!app/signing/mtg-lifecounter.jks` in
+  `android/.gitignore`): e' l'unico modo perche' le due firme siano identiche **per
+  costruzione**, senza segreti da configurare e senza dipendere da dove la macchina tiene il
+  `~/.android/debug.keystore` di sistema (qui `ANDROID_SDK_HOME` lo sposta su `D:`). Il repo e'
+  privato e l'app e' personale: la chiave non e' un segreto da proteggere, e' un identificativo
+  da non perdere.
+- **Non rigenerarla e non cambiarla mai.** Android rifiuta l'aggiornamento fra firme diverse
+  (Play Protect lo segnala come app non riconosciuta); l'unico rimedio e' disinstallare, e con
+  l'app se ne vanno vite, colori, veleni e timer. Rigenerarla costa un altro giro di disinstalla
+  e reinstalla su ogni telefono.
+- Una password sola, non due: PKCS12 non ha una password per la chiave, e' lo store a
+  custodirla. `keytool` accetta `-keypass` e lo **ignora in silenzio**, quindi una
+  `keyPassword` diversa da `storePassword` fa fallire la firma con *Given final block not
+  properly padded*.
+- La pipeline non deve fare niente al riguardo: trovando la chiave nel repo, la build della CI
+  firma da sola con la stessa chiave della build locale. Prima non era cosi': AGP generava un
+  debug keystore usa e getta sul runner, quindi ogni run produceva una firma diversa.
+- **Il passaggio a questa chiave e' stato una volta sola**: il primo APK firmato cosi' va
+  installato dopo aver disinstallato la versione precedente, **qualunque** chiave avesse, perche'
+  la chiave del progetto e' nuova e nessuna firma precedente combacia. Da li' in poi
+  `adb install -r` funziona e vite, colori e timer restano.
+- Un disco del telefono pieno fa fallire l'installazione con
+  `Requested internal only, but not enough space`: e' un problema **diverso** dalla firma ma si
+  presenta uguale (l'app non si aggiorna). Vale la pena guardare `adb shell df -h /data`
+  prima di dare la colpa alla firma.
 
 ## Regole operative
 
@@ -62,9 +97,11 @@ e timer salvati. L'APK esce come
   **senza righe vuote** tra i bullet. Passare il messaggio con un solo `-m` e una here-string.
   La riga vuota dopo il titolo non va mai persa: senza, git non separa titolo e descrizione e
   il messaggio si legge tutto su una riga (es. in `git log --oneline`, nel grafo, ecc.).
-- L'unico testo **in inglese** del progetto e' quello che esce all'esterno: le note della
-  release e il messaggio Telegram (li legge chi non ha scritto l'app). Tutto il resto — codice,
-  commenti, commit, documentazione — resta in italiano.
+- L'inglese nel progetto ha **due soli** posti: quello che esce all'esterno (le note della
+  release e il messaggio Telegram, che li legge chi non ha scritto l'app) e i **commenti della
+  pipeline** (`.github/workflows/*.yml`, scelta esplicita dell'utente: si leggono su GitHub,
+  accanto ai workflow di tutti gli altri). Tutto il resto — codice, commenti, commit,
+  documentazione — resta in italiano.
 - Non fare refactoring o "pulizie" non richieste.
 - Rispondere in italiano, tono breve e concreto.
 
@@ -222,10 +259,30 @@ i due comandi; non si editano i PNG.
 
 ## Pipeline GitHub Actions
 
-`.github/workflows/build-release.yml` costruisce l'APK Android (e l'IPA iOS sulle release
-stabili) e pubblica la release. Quattro job: `versione` (legge la versione dal pubspec e ne
-ricava i nomi dei file), `build` (APK su `ubuntu-latest`), `ios` (IPA su `macos-latest`, solo sui
-tag stabili) e `release`. Tre inneschi:
+La pipeline e' **sei file** in `.github/workflows/`: un orchestratore e cinque workflow
+riusabili, uno per blocco di lavoro, con il nome di quello che fanno.
+
+| file | ruolo |
+| --- | --- |
+| `build-release.yml` | l'unico con gli inneschi: tiene l'ordine dei job, ognuno di una riga |
+| `read-version.yml` | legge la versione dal pubspec e ne ricava nomi dei file ed etichetta |
+| `build-apk.yml` | APK su `ubuntu-latest` (unico dal quale dipende la release) |
+| `build-ipa.yml` | IPA su `macos-latest`, solo sui tag stabili |
+| `release.yml` | GitHub Release + notifica Telegram |
+| `publish-private.yml` | copia di APK e IPA sul repository privato |
+
+- **Perche' file e non cartelle**: le *composite action* obbligano a `cartella/action.yml`
+  (verificato sulla documentazione GitHub), quindi per avere file piatti con un nome parlante
+  si usano i **workflow riusabili** (`on: workflow_call`). Il prezzo e' che gli input si
+  passano a mano (`with:`/`secrets:`), non sono piu' variabili del chiamante.
+- Un workflow chiamato **non vede l'`env` del chiamante**: per questo `FLUTTER_VERSION: 3.47.4`
+  e' scritto **due volte** (`build-apk.yml` e `build-ipa.yml`) e va alzato in entrambi insieme
+  all'SDK locale. L'`env` non e' nemmeno un contesto ammesso in `jobs.<id>.with`.
+- I `permissions` di un workflow chiamato sono **l'intersezione** fra quelli del chiamante e i
+  suoi: `contents: write` serve sia in `build-release.yml` sia in `release.yml`.
+- Il contesto `secrets` **non e' ammesso nell'`if:` di uno step**: la presenza dei segreti si
+  controlla dentro lo script (`if [ -z "$..." ]`), non con un `if:`.
+- Inneschi (tutti in `build-release.yml`):
 
 | evento | cosa succede |
 | --- | --- |
@@ -234,18 +291,18 @@ tag stabili) e `release`. Tre inneschi:
 | tag `v1.0.4-SNAPSHOT` (da `develop`) | build del solo APK + GitHub Release **pre-release**: la "latest" non si tocca |
 | `workflow_dispatch` | a mano dalla scheda Actions (solo APK) |
 
-- **GitHub esegue il workflow che sta nel commit spinto**: se il file non c'e' sul ramo o sul
-  commit taggato, la pipeline non parte. Un tag su `develop` funziona (il file e' li'), un push
+- **GitHub esegue il workflow che sta nel commit spinto**: se i file non ci sono sul ramo o sul
+  commit taggato, la pipeline non parte. Un tag su `develop` funziona (i file sono li'), un push
   su `master` funziona solo quando `master` conterra' davvero il codice.
-- `build` e `ios` (quando c'e') partono **in parallelo** e leggono `needs.versione.outputs.*`:
-  la versione si legge una volta sola, quindi APK e IPA non possono divergere ne' nel nome ne'
-  nel numero.
-- L'APK esce come `MTG-Life-Counter-<versione>-build<numero>.apk` (non `app-release.apk`):
-  ci pensa lo step `Prepara l'artefatto`, che rinomina la copia in `dist/`. Stesso nome che da'
-  `tool/build_apk.ps1` per lo stesso commit (con `-Snapshot` per gli snapshot di `develop`,
-  dove l'etichetta diventa `<versione>-SNAPSHOT`).
-- L'IPA esce come `MTG-Life-Counter-<versione>-build<numero>.ipa`: il job `ios` lo costruisce
-  con `flutter build ios --release --no-codesign` e poi impacchetta `build/ios/iphoneos/Runner.app`
+- **La versione si legge una volta sola** nel job `version` e da li' il job `build` e il job
+  `ios` prendono `build-name`, `build-number` e `file-name`: partono **in parallelo** e non
+  possono divergere ne' nel nome ne' nel numero.
+- L'APK esce come `MTG-Life-Counter-<versione>.apk` (non `app-release.apk`): ci
+  pensa lo step `Stage the APK in dist/`, che copia con il nome definitivo. Stesso nome che da'
+  `tool/build_apk.ps1` per lo stesso commit (con `-Snapshot` per gli snapshot di `develop`, dove
+  l'etichetta diventa `<versione>-SNAPSHOT`).
+- L'IPA esce come `MTG-Life-Counter-<versione>.ipa`: il file lo costruisce con
+  `flutter build ios --release --no-codesign` e poi impacchetta `build/ios/iphoneos/Runner.app`
   in `Payload/Runner.app` con `ditto`. Non si usa `flutter build ipa` perche' con `--no-codesign`
   si ferma prima dell'esportazione ("Codesigning disabled with --no-codesign, skipping IPA.")
   e lascia solo l'archivio.
@@ -264,9 +321,9 @@ tag stabili) e `release`. Tre inneschi:
   minuti che non cambierebbero niente (l'IPA di uno snapshot va comunque rifirmato per
   installarlo, e chi prova `develop` vuole l'APK). Il prezzo e' che uno snapshot esce **col solo
   APK**, ed e' esattamente quello che dicono le note e il messaggio Telegram.
-- **La release non dipende da iOS**: `release` ha
+- **La release non dipende da iOS**: il job `release` ha
   `if: !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.build.result == 'success'`,
-  lo step che scarica l'IPA ha `if: needs.ios.result == 'success'` e `files:` tiene i due
+  lo step che scarica l'IPA ha `if: inputs.ios-result == 'success'` e `files:` tiene i due
   pattern con `fail_on_unmatched_files: false`. Un runner macOS senza minuti, o Xcode che cambia
   idea, non possono impedire di pubblicare l'APK gia' costruito.
 - Versione: **tutta dal `version:` di `pubspec.yaml`** (`nome+numero`), unica fonte per
@@ -279,24 +336,68 @@ tag stabili) e `release`. Tre inneschi:
 - Lo snapshot di `develop` esce con `prerelease: true` e `make_latest: false`: GitHub non lo
   mette in cima alle release, quindi `releases/latest/download/...` continua a servire la stable
   di `master`. Note e messaggio Telegram dicono che e' una build di sviluppo.
-- Le note della release (step `Prepara le note della release`, `body_path: note.md`) sono
+- Le note della release (step `Prepare the release notes`, `body_path: note.md`) sono
   **in inglese**, come il messaggio Telegram: le legge chi arriva sulla pagina delle release dal
   di fuori, quindi raccontano cosa e' l'app, cosa c'e' negli allegati e come si installano
-  (APK firmato con la debug key, IPA non firmato da rifirmare con un Apple ID, requisiti di
-  sistema). Tutto quello che riguarda l'IPA compare **solo se l'IPA c'e'** (`IOS_RESULT`, cioe'
-  `needs.ios.result`): niente allegati promessi e non consegnati. I commenti del workflow e di
-  tutto il progetto restano invece in italiano.
-- A release pubblicata lo step `Notifica su Telegram` manda un messaggio con i link diretti
-  all'APK (e all'IPA, quando c'e': `releases/download/<tag>/<file>`) e quello alle note. I nomi
-  dei file vengono dal job `versione` (`outputs.apk`, `outputs.ipa`).
-  Richiede i segreti `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`: se mancano la notifica viene
-  saltata con un `::warning::` e la release resta comunque valida.
+  (APK firmato con la chiave del progetto, IPA non firmato da rifirmare con un Apple ID,
+  requisiti di sistema). Tutto quello che riguarda l'IPA compare **solo se l'IPA c'e'**
+  (`IOS_RESULT`, cioe' `needs.ios.result`): niente allegati promessi e non consegnati.
+- A release pubblicata lo step `Notify on Telegram` manda un messaggio con i link diretti
+  all'APK (e all'IPA, quando c'e': `releases/download/<tag>/<file>`) e quello alle note. Richiede
+  i segreti `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`: se mancano la notifica viene saltata con
+  un `::warning::` e la release resta comunque valida.
 - La notifica ha `continue-on-error: true`: Telegram e' un di piu', e un rifiuto (token scaduto,
   bot bloccato, rate limit) non deve rendere rosso un run che ha gia' pubblicato la release.
-- L'`flutter analyze` del workflow e' **non bloccante** (`continue-on-error`): i 12 `info`
-  preesistenti farebbero altrimenti fallire la build.
-- Flutter pinnato a `3.47.4` in cima al file (`env.FLUTTER_VERSION`): da aggiornare insieme
-  all'SDK locale.
+- L'`flutter analyze` del workflow e' **non bloccante**: i 12 `info` preesistenti farebbero
+  altrimenti fallire la build. Lo step finisce con `|| echo "::warning::..."` e non con
+  `continue-on-error`: uno step "ammesso al fallimento" lascia comunque sul job l'annotazione
+  rossa *Process completed with exit code 1*, e un job che sembra sempre rotto non lo guarda
+  piu' nessuno. Cosi' il codice di uscita resta zero e resta un avviso arancione.
+
+### Secondo canale: il repository privato
+
+`publish-private.yml` carica gli stessi file su un repository di artefatti privato
+(`repository.axelhome.me`), **oltre** alla release su GitHub. Stessi inneschi della release,
+quindi solo sui tag, stabili e snapshot.
+
+- E' un job a se' (e non uno step in piu' in `release.yml`): il job `release` non lo ha fra i
+  `needs`, quindi i due partono **in parallelo** e ognuno finisce per conto suo. Un repository
+  privato che non risponde lascia il run verde e la release pubblicata: era la prima cosa che si
+  rompeva mentre il server veniva messo su, e deve restare il pezzo meno importante della
+  pipeline.
+- **Nessuno step di `publish-private.yml` puo' far fallire il run**: `Upload with curl` conta
+  gli errori invece di fermarsi (un file che non passa non tiene a terra gli altri), li segnala
+  con un `::warning::` e finisce comunque con `exit 0`; anche "nessun file da caricare" e' un
+  avviso e non un errore. E' la stessa scelta dell'analisi statica in `build-apk.yml`: un
+  fallimento tollerato lascia comunque l'annotazione rossa *Process completed with exit code 1*,
+  e un job che sembra sempre rotto non lo guarda piu' nessuno. Quando il server risponde, e solo
+  se un upload che non passa deve rendere rosso il run, si sostituisce `warning` con `error` e
+  `exit 0` con `exit 1`: la release esce comunque, perche' la pubblica un altro job.
+- L'upload e' un `PUT` con il file come corpo e basic auth, quello che si aspettano sia Nexus
+  sia Artifactory su un repository generico: `PUT <url>/<repository>/<path>/<file>`, dove
+  `url` si ferma al segmento dell'istanza (`/repository`, o `/artifactory`) e `path` e'
+  l'etichetta della release.
+- URL e nome del repository sono **input con valore predefinito** in `publish-private.yml`
+  (`https://repository.axelhome.me/repository` e `mtg-lifecounter`), sovrascrivibili da
+  *Settings > Secrets and variables > Actions > Variables* con `PRIVATE_REPO_URL` e
+  `PRIVATE_REPO_NAME` senza toccare il file. Le credenziali sono i segreti
+  `PRIVATE_REPO_USER` e `PRIVATE_REPO_PASSWORD`: se mancano l'upload viene **saltato** con un
+  `::warning::` e la release resta valida.
+- `curl` usa `--upload-file` (PUT in streaming, un APK da 40 MB non finisce in memoria),
+  `--fail-with-body` (un errore HTTP diventa codice di uscita diverso da zero e la risposta del
+  server — "401 Unauthorized", "400 Bad Request" — viene comunque stampata), `--retry 3` e
+  `--retry-connrefused`. Le barre finali di `url` e `path` vengono tolte prima di comporre
+  l'indirizzo, cosi' si possono scrivere con o senza.
+
+### Controlli in locale (solo sviluppo)
+
+Due script in `build/` (cartella gitignored) provano la pipeline senza spingere niente:
+`python build\estrai_run.py` fa i controlli statici (YAML, `bash -n` su ogni blocco `run:`,
+`uses: ./...` che punta a file esistenti con `on: workflow_call`, input e segreti passati
+dichiarati, `inputs.X`/`secrets.X` mai dichiarati), `python build\prova_pipeline.py` esegue i
+blocchi `run:` con un `curl` finto (che puo' anche fallire, per provare il caso del server che
+non risponde) e verifica etichette di versione, note, messaggio Telegram e indirizzi di upload.
+Il primo test vero resta il run su GitHub.
 
 ### Come si pubblica una release
 
@@ -311,9 +412,9 @@ Il tag lo crea `git flow release finish`: non si tagga a mano.
 4. `git push origin master develop --follow-tags`.
 
 **E' il tag che fa partire tutto**: build + release + notifica Telegram. Deve stare su un commit
-che contiene `.github/workflows/build-release.yml`, perche' GitHub esegue il workflow del commit
-spinto: una pipeline modificata solo su `develop` non si vede nella release finche' non e'
-arrivata su `master`.
+che contiene `.github/workflows/build-release.yml` (e i workflow che chiama), perche' GitHub
+esegue il workflow del commit spinto: una pipeline modificata solo su `develop` non si vede
+nella release finche' non e' arrivata su `master`.
 
 Subito dopo, per riaprire lo sviluppo: su `develop` si porta `pubspec.yaml` alla versione
 successiva (`1.0.5+6`) e si committa.
@@ -333,11 +434,14 @@ il solo APK: l'IPA si costruisce solo per le release stabili.
 - `lib/main.dart` — l'app.
 - `pubspec.yaml` — dipendenze, font, configurazione icona e **versione** (unica fonte).
 - `tool/make_icon.ps1` — l'icona.
-- `tool/build_apk.ps1` — l'APK locale, con nome e numero della release.
-- `.github/workflows/build-release.yml` — build e release di APK e IPA (l'IPA solo sui tag
-  stabili).
+- `tool/build_apk.ps1` — l'APK locale, con il nome della release.
+- `.github/workflows/` — la pipeline: `build-release.yml` (inneschi e ordine dei job) piu' i
+  workflow riusabili `read-version.yml`, `build-apk.yml`, `build-ipa.yml`, `release.yml` e
+  `publish-private.yml`. L'IPA si costruisce solo sui tag stabili.
 - `android/app/src/main/kotlin/.../MainActivity.kt` — il canale del suono di fine tempo.
 - `android/app/src/main/AndroidManifest.xml` — nome app (`MTG Life Counter`) e icona.
+- `android/app/signing/mtg-lifecounter.jks` — la chiave di firma unica (vedi "La chiave di
+  firma"): sta nel repo, non si rigenera.
 - `ios/Runner.xcodeproj/project.pbxproj` — progetto iOS (Swift Package Manager, bundle id,
   firma automatica, iOS 15).
 

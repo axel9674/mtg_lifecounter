@@ -1,33 +1,30 @@
-# Build e release dell'APK Android e dell'IPA iOS.
+# Build and release of the Android APK and of the iOS IPA.
 #
-# Si attiva su:
-#   - push sul ramo `master` -> costruisce l'APK e lo lascia come artefatto del workflow
-#   - push di un tag `v*`    -> crea la GitHub Release con l'APK (e l'IPA, quando c'e')
-#       - tag `v1.0.4`          -> release stabile: e' lei a diventare la "latest" del repository
-#       - tag `v1.0.5-SNAPSHOT` -> build di `develop`: esce come pre-release e non tocca la latest
-#   - manualmente dalla scheda Actions (`workflow_dispatch`)
+# This file is the pipeline: it holds the triggers and the order of the jobs. Every job is
+# one line long, because the work of each of them lives in a workflow of its own, next to
+# this one in `.github/workflows/`, with the name of what it does (read-version.yml,
+# build-apk.yml, ...). To read a block you open one file with a telling name instead of
+# scrolling through this one.
 #
-# L'IPA lo costruisce solo il job `ios`, che gira **solo sui tag stabili** (la ragione sta
-# li'): su `master`, sui `workflow_dispatch` e sugli snapshot la release esce col solo APK,
-# e note e messaggio Telegram non nominano un IPA che non c'e'.
+# Triggers:
+#   - push to `master`       -> builds the APK and keeps it as a workflow artifact
+#   - push of a `v*` tag     -> publishes the GitHub Release with the APK (and the IPA)
+#       - tag `v1.0.4`          -> stable release: it becomes the repository "latest"
+#       - tag `v1.0.5-SNAPSHOT` -> build of `develop`: goes out as a pre-release, latest untouched
+#   - manually from the Actions tab (`workflow_dispatch`)
 #
-# I rami seguono git flow: `master` e' la produzione, `develop` l'integrazione, le release
-# nascono da `release/*` e le correzioni di emergenza da `hotfix/*` (vedi AGENTS.md).
+# The IPA is built by the `ios` job only, which runs **on stable tags only** (the reason is
+# in that job): on `master`, on a `workflow_dispatch` and on snapshots the release ships the
+# APK alone, and neither the notes nor the Telegram message name an IPA that is not there.
 #
-# Nota: GitHub esegue il workflow che sta nel commit spinto, quindi questo file deve
-# esistere sul ramo/commit interessato (per i tag: sul commit taggato), altrimenti la
-# pipeline non parte. Una modifica della pipeline che vive solo su `develop` non si vede
-# nella release finche' non e' arrivata su `master`.
+# The branches follow git flow: `master` is production, `develop` is integration, releases
+# branch off `release/*` and emergency fixes off `hotfix/*` (see AGENTS.md).
 #
-# Le action sono fissate ai tag di major mobili (vN): si aggiornano a mano. Da v5/v6
-# in poi girano su Node 24 e vogliono un runner >= 2.327.1: `ubuntu-latest` e
-# `macos-latest` vanno bene, su runner self-hosted no. `subosito/flutter-action` e'
-# l'unica ancora a `v2`.
-#
-# L'IPA ha bisogno di un runner macOS (e' l'unico con Xcode): i suoi minuti si pagano
-# 10 volte quelli di Linux, quindi quel job gira solo per le release stabili. L'IPA esce
-# **non firmato**, vedi il job `ios`.
-name: Build e release (APK + IPA)
+# Note: GitHub runs the workflow stored in the pushed commit, so this file has to exist on
+# the branch/commit that triggers it (for a tag: on the tagged commit), otherwise the
+# pipeline never starts. A pipeline change living only on `develop` is invisible to a
+# release until it has reached `master`.
+name: Build and release (APK + IPA)
 
 on:
   push:
@@ -35,389 +32,95 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
-# Serve a creare la release (scrittura sui contenuti del repo).
+# Needed to create the release (write access to the contents of the repository). It is
+# declared here as well as in release.yml because a reusable workflow is granted only what
+# the caller and the file itself both allow.
 permissions:
   contents: write
 
-env:
-  FLUTTER_VERSION: 3.47.4
-
 jobs:
-  # La versione si legge una volta sola e la usano tutti i job: la stessa finisce
-  # nell'APK, nell'IPA e nei nomi dei file allegati alla release.
-  versione:
-    name: Calcola la versione
-    runs-on: ubuntu-latest
-    outputs:
-      nome: ${{ steps.versione.outputs.nome }}
-      numero: ${{ steps.versione.outputs.numero }}
-      etichetta: ${{ steps.versione.outputs.etichetta }}
-      snapshot: ${{ steps.versione.outputs.snapshot }}
-      apk: ${{ steps.versione.outputs.apk }}
-      ipa: ${{ steps.versione.outputs.ipa }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      # La versione sta in `version:` di pubspec.yaml (`nome+numero`) ed e' l'unica
-      # fonte: la usano anche `flutter run` e `tool/build_apk.ps1`, quindi i file qui
-      # costruiti e quelli locali hanno la stessa etichetta e lo stesso numero di build.
-      # Il tag fornisce solo l'etichetta della release; il numero non deve mai calare:
-      # Android rifiuta l'installazione con INSTALL_FAILED_VERSION_DOWNGRADE (e
-      # `flutter run`, dopo il rifiuto, disinstalla la versione vecchia portandosi via
-      # le vite salvate).
-      #
-      # Sul ramo di sviluppo i tag portano `-SNAPSHOT` (v1.0.4-SNAPSHOT): e' la stessa
-      # versione del pubspec, solo non ancora pubblicata. Il suffisso finisce nell'etichetta
-      # della release e nel nome dei file, **mai** in `--build-name`: iOS
-      # (CFBundleShortVersionString) accetta solo numeri.
-      - name: Leggi la versione da pubspec.yaml
-        id: versione
-        shell: bash
-        run: |
-          pubspec="$(sed -n 's/^version: *//p' pubspec.yaml | head -n1)"
-          nome="${pubspec%%+*}"
-          numero="${pubspec##*+}"
-          if [[ ! "$numero" =~ ^[1-9][0-9]*$ ]]; then
-            echo "::error::version: '$pubspec' non ha la forma nome+numero (es. 1.0.2+3)"
-            exit 1
-          fi
-          etichetta="$nome"
-          snapshot=false
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            tag="${GITHUB_REF_NAME#v}"
-            # Il confronto ignora il suffisso: v1.0.4-SNAPSHOT e' la 1.0.4 del pubspec.
-            if [[ "${tag%-SNAPSHOT}" != "$nome" ]]; then
-              echo "::warning::Il tag $GITHUB_REF_NAME non combacia col version: '$pubspec' di pubspec.yaml"
-            fi
-            etichetta="$tag"
-            if [[ "$tag" == *-SNAPSHOT ]]; then
-              snapshot=true
-            fi
-          fi
-          echo "nome=$nome" >> "$GITHUB_OUTPUT"
-          echo "numero=$numero" >> "$GITHUB_OUTPUT"
-          echo "etichetta=$etichetta" >> "$GITHUB_OUTPUT"
-          echo "snapshot=$snapshot" >> "$GITHUB_OUTPUT"
-          echo "apk=MTG-Life-Counter-$etichetta-build$numero.apk" >> "$GITHUB_OUTPUT"
-          echo "ipa=MTG-Life-Counter-$etichetta-build$numero.ipa" >> "$GITHUB_OUTPUT"
-          echo "Etichetta $etichetta (build $numero, dal pubspec $nome+$numero)"
+  # The version is read once and used by every job: the same label and the same build number
+  # end up in the APK, in the IPA and in the names of the files attached to the release.
+  version:
+    name: Compute the version
+    uses: ./.github/workflows/read-version.yml
 
   build:
-    name: Build APK release
-    needs: versione
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+    name: Build the APK
+    needs: version
+    uses: ./.github/workflows/build-apk.yml
+    with:
+      build-name: ${{ needs.version.outputs.name }}
+      build-number: ${{ needs.version.outputs.number }}
+      file-name: ${{ needs.version.outputs.apk }}
 
-      - name: Java 17
-        uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Flutter ${{ env.FLUTTER_VERSION }}
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: stable
-          cache: true
-
-      - name: Dipendenze
-        run: flutter pub get
-
-      # `flutter analyze` esce con codice 1 per i 12 `info` preesistenti in lib/main.dart,
-      # quindi qui e' solo informativo e non fa fallire la build.
-      - name: Analisi statica (non bloccante)
-        run: flutter analyze lib
-        continue-on-error: true
-
-      # La release e' firmata con la debug key (android/app/build.gradle.kts): va bene
-      # per il sideload, non per pubblicare sul Play Store.
-      - name: Build APK release
-        run: |
-          flutter build apk --release \
-            --build-name "${{ needs.versione.outputs.nome }}" \
-            --build-number "${{ needs.versione.outputs.numero }}"
-
-      # Nome del file: MTG-Life-Counter-<versione>-build<numero>.apk. Uguale a quello
-      # che produce `tool/build_apk.ps1` per lo stesso commit.
-      - name: Prepara l'artefatto
-        run: |
-          mkdir -p dist
-          cp build/app/outputs/flutter-apk/app-release.apk \
-             "dist/${{ needs.versione.outputs.apk }}"
-
-      - name: Salva l'APK come artefatto
-        uses: actions/upload-artifact@v7
-        with:
-          name: mtg-lifecounter-apk
-          path: dist/*.apk
-          if-no-files-found: error
-
-  # L'IPA per iOS. Serve `macos-latest` perche' Xcode esiste solo li': i minuti di un
-  # runner macOS si pagano 10 volte quelli di Linux, quindi questo job e' il piu'
-  # costoso della pipeline.
+  # The IPA needs `macos-latest` because Xcode exists only there: minutes on a macOS runner
+  # are billed 10 times the Linux ones, so this is the most expensive job of the pipeline.
   #
-  # Parte **solo per le release stabili** (`v1.0.4`): su un push su `master`, su un
-  # `workflow_dispatch` e sugli snapshot di `develop` viene saltato. Quei minuti costosi
-  # non cambierebbero niente (l'IPA di uno snapshot va comunque rifirmato per installarlo,
-  # e chi prova `develop` vuole l'APK) e il job `release` non dipende da questo: senza IPA
-  # salta solo lo scarico dell'artefatto.
-  #
-  # L'IPA esce **non firmato**: per firmarlo in pipeline servirebbe un account Apple
-  # Developer a pagamento con certificato e provisioning profile nei segreti del
-  # repository (DEVELOPMENT_TEAM, BUILD_CERTIFICATE_BASE64, P12_PASSWORD,
-  # PROVISIONING_PROFILE_BASE64) piu' `--export-method`. Un IPA non firmato si
-  # installa comunque con Sideloadly o AltStore, che lo rifirmano con il proprio
-  # Apple ID al momento dell'installazione (con un Apple ID gratuito la firma dura
-  # 7 giorni); da solo, con un doppio clic, non si installa.
+  # It starts **on stable releases only** (`v1.0.4`): on a push to `master`, on a
+  # `workflow_dispatch` and on the snapshots of `develop` it is skipped. Those expensive
+  # minutes would not change anything (the IPA of a snapshot has to be re-signed to be
+  # installed anyway, and whoever tries `develop` wants the APK) and the release does not
+  # depend on this job: without the IPA it only skips the artifact download.
   ios:
-    name: Build IPA release
-    needs: versione
+    name: Build the IPA
+    needs: version
     if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-SNAPSHOT')
-    runs-on: macos-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Flutter ${{ env.FLUTTER_VERSION }}
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: stable
-          cache: true
-
-      - name: Dipendenze
-        run: flutter pub get
-
-      # I plugin iOS di questo progetto passano da Swift Package Manager
-      # (Runner.xcodeproj contiene FlutterGeneratedPluginSwiftPackage), quindi non
-      # servono ne' Podfile ne' CocoaPods.
-      #
-      # `--no-codesign` e' d'obbligo: senza un team di sviluppo Xcode non sa con
-      # quale certificato firmare. Non si usa `flutter build ipa` perche' con
-      # `--no-codesign` si ferma prima dell'esportazione ("Codesigning disabled with
-      # --no-codesign, skipping IPA.") e lascia solo l'archivio.
-      - name: Build iOS release
-        run: |
-          flutter build ios --release --no-codesign \
-            --build-name "${{ needs.versione.outputs.nome }}" \
-            --build-number "${{ needs.versione.outputs.numero }}"
-
-      # Un IPA e' uno zip che contiene `Payload/Runner.app`. `ditto` e' lo strumento
-      # di macOS per creare l'archivio lasciando i link simbolici al loro posto.
-      - name: Impacchetta l'IPA
-        run: |
-          mkdir -p Payload dist
-          cp -R build/ios/iphoneos/Runner.app Payload/Runner.app
-          ditto -c -k --keepParent Payload "dist/${{ needs.versione.outputs.ipa }}"
-
-      - name: Salva l'IPA come artefatto
-        uses: actions/upload-artifact@v7
-        with:
-          name: mtg-lifecounter-ipa
-          path: dist/*.ipa
-          if-no-files-found: error
+    uses: ./.github/workflows/build-ipa.yml
+    with:
+      build-name: ${{ needs.version.outputs.name }}
+      build-number: ${{ needs.version.outputs.number }}
+      file-name: ${{ needs.version.outputs.ipa }}
 
   release:
-    name: Crea la GitHub Release
-    needs: [versione, build, ios]
-    # Solo per i tag `v*`: un push su `master` costruisce gli artefatti ma non pubblica niente.
-    # Un tag di develop (`v1.0.5-SNAPSHOT`) esce come **pre-release** e non diventa la
-    # "latest" del repository: quel posto resta alle release stabili taggate su `master`.
+    name: Publish the GitHub Release
+    needs: [version, build, ios]
+    # Tags `v*` only: a push to `master` builds the artifacts but publishes nothing.
+    # A `develop` tag (`v1.0.5-SNAPSHOT`) goes out as a **pre-release** and does not become
+    # the repository "latest": that place stays with the stable releases tagged on `master`.
     #
-    # `!cancelled()` e il controllo sull'APK tengono la release al riparo da iOS: sugli
-    # snapshot il job `ios` viene saltato, ma un runner macOS senza minuti o Xcode che cambia
-    # idea non devono impedire di pubblicare l'APK gia' costruito. Un job saltato o fallito
-    # non "cancella" il workflow, quindi la release parte lo stesso.
+    # `!cancelled()` and the check on the APK keep the release safe from iOS: on snapshots
+    # the `ios` job is skipped, but a macOS runner out of minutes or Xcode changing its mind
+    # must not stop the APK that has already been built from being published. A skipped or
+    # failed job does not "cancel" the workflow, so the release starts anyway.
     if: >-
       !cancelled()
       && startsWith(github.ref, 'refs/tags/v')
       && needs.build.result == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Scarica l'APK
-        uses: actions/download-artifact@v8
-        with:
-          name: mtg-lifecounter-apk
-          path: dist
+    uses: ./.github/workflows/release.yml
+    with:
+      label: ${{ needs.version.outputs.label }}
+      tag: ${{ github.ref_name }}
+      apk: ${{ needs.version.outputs.apk }}
+      ipa: ${{ needs.version.outputs.ipa }}
+      snapshot: ${{ needs.version.outputs.snapshot }}
+      # `success` only when the IPA really is there: the notes and the Telegram message name
+      # it only in that case.
+      ios-result: ${{ needs.ios.result }}
+    secrets:
+      telegram-bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      telegram-chat-id: ${{ secrets.TELEGRAM_CHAT_ID }}
 
-      # L'artefatto c'e' solo se il job `ios` ha girato ed e' riuscito (`failure` e `skipped`
-      # non combaciano con `success`): senza IPA la release esce col solo APK, e le note qui
-      # sotto se ne accorgono da `IOS_RESULT`.
-      - name: Scarica l'IPA
-        if: needs.ios.result == 'success'
-        uses: actions/download-artifact@v8
-        with:
-          name: mtg-lifecounter-ipa
-          path: dist
-
-      # Le note della release sono in **inglese**: le legge chi arriva sulla pagina delle
-      # release dal di fuori, quindi raccontano cosa e' l'app e come si installa, non cosa
-      # e' cambiato per chi l'ha scritta. (I commenti di questo workflow restano in italiano
-      # come il resto del progetto.)
-      # La prima parte distingue lo snapshot di `develop` dalla release di `master`: chi
-      # arriva qui deve capirlo subito.
-      - name: Prepara le note della release
-        env:
-          APK_FILE: ${{ needs.versione.outputs.apk }}
-          IPA_FILE: ${{ needs.versione.outputs.ipa }}
-          SNAPSHOT: ${{ needs.versione.outputs.snapshot }}
-          IOS_RESULT: ${{ needs.ios.result }}
-        run: |
-          if [ "$SNAPSHOT" = "true" ]; then
-            printf '%s\n' \
-              "> **Development build.** This is the current state of the \`develop\` branch," \
-              "> not a release: it is published as a pre-release, so the latest stable" \
-              "> version (built from \`master\`) is unaffected. Expect unfinished work -" \
-              "> features and appearance may still change." \
-              "" > note.md
-          else
-            : > note.md
-          fi
-
-          # L'IPA c'e' solo quando il job `ios` ha girato ed e' riuscito: sugli snapshot non
-          # parte. Le note nominano l'IPA **solo se c'e' davvero**: un allegato promesso e non
-          # consegnato si legge peggio di una release con un file solo.
-          if [ "$IOS_RESULT" = "success" ]; then
-            has_ipa=true
-            allegati="Both the Android and the iOS build are attached to this release."
-            requisiti="Android 7.0 (API 24) or newer, or iOS 15 or newer."
-          else
-            has_ipa=false
-            allegati="The Android build is attached to this release."
-            requisiti="Android 7.0 (API 24) or newer."
-          fi
-
-          printf '%s\n' \
-            "A two-player life counter for Magic: The Gathering. $allegati" \
-            "" \
-            "### Downloads" \
-            "" \
-            "- **Android** - \`$APK_FILE\`, signed with the Android debug key" >> note.md
-
-          if [ "$has_ipa" = true ]; then
-            printf '%s\n' "- **iOS** - \`$IPA_FILE\`, unsigned" >> note.md
-          fi
-
-          printf '%s\n' \
-            "" \
-            "### Installing on Android" \
-            "" \
-            "Open the APK on the device (allow installs from unknown sources when asked)," \
-            "or, with the phone connected over USB, run \`adb install -r $APK_FILE\`." \
-            "The package is signed with the Android debug key, so it is meant for" \
-            "sideloading: Google Play will not accept it, and every later build has to be" \
-            "installed the same way, otherwise Android refuses it as an update." >> note.md
-
-          if [ "$has_ipa" = true ]; then
-            printf '%s\n' \
-              "" \
-              "### Installing on iOS" \
-              "" \
-              "The IPA is not signed and will not install with a double click. Sideload it" \
-              "with Sideloadly or AltStore: they re-sign it with your own Apple ID, and a" \
-              "signature made with a free Apple ID expires after 7 days." >> note.md
-          fi
-
-          printf '%s\n' \
-            "" \
-            "### Requirements" \
-            "" \
-            "$requisiti The app interface is in Italian." \
-            "" \
-            "Source code, build instructions and every other release:" \
-            "https://github.com/$GITHUB_REPOSITORY" >> note.md
-          cat note.md
-
-      # I nomi dei file vengono dal job `versione`: sono gli stessi che danno
-      # `tool/build_apk.ps1` e la build del telefono per lo stesso commit.
-      # `prerelease` e `make_latest` sono speculari: solo la release di `master` prende
-      # la "latest", lo snapshot di `develop` no.
-      - name: Pubblica la release
-        uses: softprops/action-gh-release@v3
-        with:
-          name: MTG Life Counter ${{ needs.versione.outputs.etichetta }}
-          body_path: note.md
-          prerelease: ${{ needs.versione.outputs.snapshot }}
-          make_latest: ${{ needs.versione.outputs.snapshot == 'true' && 'false' || 'true' }}
-          files: |
-            dist/*.apk
-            dist/*.ipa
-          # Senza IPA il secondo pattern non combacia niente: non e' un errore.
-          fail_on_unmatched_files: false
-          generate_release_notes: true
-
-      # Avviso su Telegram con i link diretti ai file pubblicati. Servono due
-      # segreti del repository:
-      #   TELEGRAM_BOT_TOKEN  token del bot (BotFather)
-      #   TELEGRAM_CHAT_ID    id della chat che riceve l'avviso
-      # Se mancano la notifica viene saltata e la release resta valida.
-      #
-      # La notifica e' un di piu' e non ha potere sull'esito del run: con
-      # `continue-on-error` un rifiuto di Telegram (token scaduto, bot bloccato, rate limit)
-      # non rende rosso un run che ha gia' pubblicato la release.
-      - name: Notifica su Telegram
-        continue-on-error: true
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          APK_FILE: ${{ needs.versione.outputs.apk }}
-          IPA_FILE: ${{ needs.versione.outputs.ipa }}
-          SNAPSHOT: ${{ needs.versione.outputs.snapshot }}
-          IOS_RESULT: ${{ needs.ios.result }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-            echo "::warning::TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID non configurati: notifica saltata."
-            exit 0
-          fi
-
-          repo="https://github.com/$GITHUB_REPOSITORY"
-          apk_url="$repo/releases/download/$TAG/$APK_FILE"
-          ipa_url="$repo/releases/download/$TAG/$IPA_FILE"
-          release_url="$repo/releases/tag/$TAG"
-
-          # Il tag finisce nel messaggio in HTML: l'escaping evita che un
-          # carattere strano (es. `&` o `<`) rompa il parse di Telegram.
-          titolo="${TAG//&/&amp;}"
-          titolo="${titolo//</&lt;}"
-          titolo="${titolo//>/&gt;}"
-
-          # Il messaggio e' in inglese come le note della release (lo legge chi arriva
-          # sulla pagina delle release, non solo chi ha scritto l'app).
-          # Lo snapshot di develop si annuncia come tale: chi legge il messaggio
-          # deve sapere che non e' la release stabile. L'IPA si nomina solo se c'e'
-          # (stessa regola delle note, da `IOS_RESULT`).
-          if [ "$SNAPSHOT" = "true" ]; then
-            tipo="Development build: not a release, the latest stable version is unchanged."
-          elif [ "$IOS_RESULT" = "success" ]; then
-            tipo="New release: the Android APK and the iOS IPA are ready."
-          else
-            tipo="New release: the Android APK is ready."
-          fi
-
-          righe=(
-            "<b>MTG Life Counter $titolo</b>"
-            "$tipo"
-            ""
-            "<a href=\"$apk_url\">Android APK: $APK_FILE</a>"
-          )
-          if [ "$IOS_RESULT" = "success" ]; then
-            righe+=("<a href=\"$ipa_url\">iOS IPA (unsigned): $IPA_FILE</a>")
-          fi
-          righe+=("<a href=\"$release_url\">What's in this release</a>")
-
-          testo="$(printf '%s\n' "${righe[@]}")"
-
-          # Il testo lo codifica curl: niente escaping a mano nella query.
-          curl -sS --fail --retry 3 --retry-connrefused \
-            --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \
-            --data-urlencode "parse_mode=HTML" \
-            --data-urlencode "disable_web_page_preview=true" \
-            --data-urlencode "text=$testo" \
-            "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" > /dev/null
-
-          echo "Notifica inviata per la release $TAG"
+  # Second publication channel: the same files also go to a private artifact repository
+  # (Nexus/Artifactory), next to the GitHub Release. Same triggers as the release, so tags
+  # only, stable and snapshot alike.
+  #
+  # It is a job of its own so that it can never hold the release back: `release` does not
+  # `need` it, the two start together and each one finishes on its own, and inside the called
+  # workflow every problem is a warning. A private repository that does not answer leaves the
+  # run green and the release published. It was the first thing to break while the server was
+  # being set up, and it has to stay the least important piece of the pipeline.
+  publish-private:
+    name: Publish to the private repository
+    needs: [version, build, ios]
+    if: >-
+      !cancelled()
+      && startsWith(github.ref, 'refs/tags/v')
+      && needs.build.result == 'success'
+    uses: ./.github/workflows/publish-private.yml
+    with:
+      path: ${{ needs.version.outputs.label }}
+      ios-result: ${{ needs.ios.result }}
+    secrets:
+      username: ${{ secrets.PRIVATE_REPO_USER }}
+      password: ${{ secrets.PRIVATE_REPO_PASSWORD }}
