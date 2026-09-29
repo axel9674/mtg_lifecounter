@@ -40,6 +40,7 @@ Per l'APK con lo stesso nome della release c'e' `tool/build_apk.ps1`:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tool\build_apk.ps1            # solo build
 powershell -NoProfile -ExecutionPolicy Bypass -File tool\build_apk.ps1 -Install   # build + adb install -r
+powershell -NoProfile -ExecutionPolicy Bypass -File tool\build_apk.ps1 -Snapshot  # etichetta -SNAPSHOT, come su develop
 ```
 
 Versione e numero di build vengono dal `version:` di `pubspec.yaml` (`nome+numero`), cioe' dalla
@@ -49,7 +50,8 @@ deve mai calare**: se cala, `adb install -r` fallisce con `INSTALL_FAILED_VERSIO
 `flutter run`, che dopo il fallimento disinstalla la versione vecchia, si porta via vite, colori
 e timer salvati. L'APK esce come
 `build\app\outputs\flutter-apk\MTG-Life-Counter-<versione>-build<numero>.apk`, accanto a
-`app-release.apk` che resta.
+`app-release.apk` che resta; con `-Snapshot` diventa
+`MTG-Life-Counter-<versione>-SNAPSHOT-build<numero>.apk`, come sui tag di `develop`.
 
 ## Regole operative
 
@@ -210,18 +212,20 @@ release. Quattro job: `versione` (legge la versione dal pubspec e ne ricava i no
 
 | evento | cosa succede |
 | --- | --- |
-| push su `main` | build di APK e IPA, salvati come artefatti del workflow |
-| push di un tag `v*` | build di APK e IPA + GitHub Release con entrambi allegati |
+| push su `master` | build di APK e IPA, salvati come artefatti del workflow |
+| tag `v1.0.4` (release, da `master`) | build + GitHub Release con i due allegati, marcata "latest" |
+| tag `v1.0.4-SNAPSHOT` (da `develop`) | build + GitHub Release **pre-release**: la "latest" non si tocca |
 | `workflow_dispatch` | a mano dalla scheda Actions |
 
 - **GitHub esegue il workflow che sta nel commit spinto**: se il file non c'e' sul ramo o sul
   commit taggato, la pipeline non parte. Un tag su `develop` funziona (il file e' li'), un push
-  su `main` funziona solo quando `main` conterra' davvero il codice.
+  su `master` funziona solo quando `master` conterra' davvero il codice.
 - `build` e `ios` partono **in parallelo** e leggono `needs.versione.outputs.*`: la versione si
   legge una volta sola, quindi APK e IPA non possono divergere ne' nel nome ne' nel numero.
 - L'APK esce come `MTG-Life-Counter-<versione>-build<numero>.apk` (non `app-release.apk`):
   ci pensa lo step `Prepara l'artefatto`, che rinomina la copia in `dist/`. Stesso nome che da'
-  `tool/build_apk.ps1` per lo stesso commit.
+  `tool/build_apk.ps1` per lo stesso commit (con `-Snapshot` per gli snapshot di `develop`,
+  dove l'etichetta diventa `<versione>-SNAPSHOT`).
 - L'IPA esce come `MTG-Life-Counter-<versione>-build<numero>.ipa`: il job `ios` lo costruisce
   con `flutter build ios --release --no-codesign` e poi impacchetta `build/ios/iphoneos/Runner.app`
   in `Payload/Runner.app` con `ditto`. Non si usa `flutter build ipa` perche' con `--no-codesign`
@@ -237,12 +241,18 @@ release. Quattro job: `versione` (legge la versione dal pubspec e ne ricava i no
   rifirmano con il proprio Apple ID (con un Apple ID gratuito la firma dura 7 giorni).
 - Il job `ios` gira su un runner **macOS**, l'unico che ha Xcode: i minuti macOS si pagano
   **10 volte** quelli di Linux. Se la pipeline diventa pesante, il primo risparmio e' limitare
-  quel job ai tag (`if: startsWith(github.ref, 'refs/tags/v')`).
+  quel job alle release stabili, lasciando fuori gli snapshot:
+  `if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-SNAPSHOT')`.
 - Versione: **tutta dal `version:` di `pubspec.yaml`** (`nome+numero`), unica fonte per
-  `flutter run`, `tool/build_apk.ps1` e questa pipeline. Il tag fornisce solo il nome della
-  release (`v1.2.3` → `1.2.3`), e se non combacia col pubspec la pipeline lo segnala con un
-  `::warning::`; senza tag il nome viene dal pubspec. Il numero dopo il `+` e' il `versionCode`
-  e viene passato a `--build-number`: **non deve mai calare**.
+  `flutter run`, `tool/build_apk.ps1` e questa pipeline. Il tag fornisce solo l'etichetta della
+  release (`v1.2.3` → `1.2.3`, `v1.2.3-SNAPSHOT` → `1.2.3-SNAPSHOT`), e se non combacia col
+  pubspec la pipeline lo segnala con un `::warning::`; senza tag l'etichetta viene dal pubspec.
+  Il `-SNAPSHOT` finisce nel nome dei file e nel titolo della release, **mai** in `--build-name`:
+  iOS (`CFBundleShortVersionString`) accetta solo numeri. Il numero dopo il `+` e' il
+  `versionCode` e viene passato a `--build-number`: **non deve mai calare**.
+- Lo snapshot di `develop` esce con `prerelease: true` e `make_latest: false`: GitHub non lo
+  mette in cima alle release, quindi `releases/latest/download/...` continua a servire la stable
+  di `master`. Note e messaggio Telegram dicono che e' una build di sviluppo.
 - A release pubblicata lo step `Notifica su Telegram` manda un messaggio con i link diretti
   all'APK e all'IPA (`releases/download/<tag>/<file>`) e quello alle note. I nomi dei file
   vengono dal job `versione` (`outputs.apk`, `outputs.ipa`).
@@ -255,19 +265,32 @@ release. Quattro job: `versione` (legge la versione dal pubspec e ne ricava i no
 
 ### Come si pubblica una release
 
-1. portare il `version:` di `pubspec.yaml` alla versione che si sta per taggare **alzando il
-   numero di build** (es. `1.0.1+2` → `1.0.2+3`) e committare: e' quella che mostrera' `flutter run`,
-   la scritta in fondo al menu e i file della release (APK e IPA);
-2. `git push origin develop` (il ramo, se si vuole che resti allineato);
-3. `git tag v1.0.2` sul commit da pubblicare;
-4. `git push origin v1.0.2`.
+Il tag lo crea `git flow release finish`: non si tagga a mano.
 
-**E' il tag che fa partire tutto**: build + release + notifica Telegram. Non serve toccare
-`main`. Il tag deve chiamarsi `v<numero>` (deve combaciare col `version:` di pubspec, altrimenti
-la pipeline avvisa) e deve stare su un commit che contiene
-`.github/workflows/build-release.yml`, perche' GitHub esegue il workflow del commit spinto.
-Prima del tag la modifica della pipeline deve essere arrivata su `main`: e' il commit taggato
-che viene costruito, quindi una pipeline modificata solo su `develop` non si vede nella release.
+1. `git flow release start 1.0.4`: il ramo nasce da `develop`;
+2. sulla release solo le ultime correzioni (niente roba nuova) e `pubspec.yaml` portato alla
+   versione che si sta taggando **alzando il numero di build** (es. `1.0.3+4` → `1.0.4+5`):
+   e' quella che mostreranno `flutter run`, la scritta in fondo al menu e i file della release;
+3. `git flow release finish 1.0.4`: unisce a `master`, crea il tag `v1.0.4` e riporta tutto
+   su `develop`;
+4. `git push origin master develop --follow-tags`.
+
+**E' il tag che fa partire tutto**: build + release + notifica Telegram. Deve stare su un commit
+che contiene `.github/workflows/build-release.yml`, perche' GitHub esegue il workflow del commit
+spinto: una pipeline modificata solo su `develop` non si vede nella release finche' non e'
+arrivata su `master`.
+
+Subito dopo, per riaprire lo sviluppo: su `develop` si porta `pubspec.yaml` alla versione
+successiva (`1.0.5+6`) e si committa.
+
+Per pubblicare invece lo **snapshot** di `develop` basta un tag sull'ultimo commit del ramo:
+
+```powershell
+git tag v1.0.4-SNAPSHOT
+git push origin v1.0.4-SNAPSHOT
+```
+
+Esce come pre-release, quindi la "latest" del repository resta la stable di `master`.
 
 ## Fonti di verita'
 
@@ -281,8 +304,51 @@ che viene costruito, quindi una pipeline modificata solo su `develop` non si ved
 - `ios/Runner.xcodeproj/project.pbxproj` — progetto iOS (Swift Package Manager, bundle id,
   firma automatica, iOS 15).
 
+## Git flow (rami e versioni)
+
+Il repository segue **git flow** (git-flow AVH, gia' inizializzato: si vede con
+`git config --get-regexp gitflow`). I due rami stabili sono `master` (produzione) e `develop`
+(integrazione); **su `master` non si committa mai a mano**, ci arrivano solo i rami di release
+e di hotfix.
+
+| ramo | nasce da | torna in | serve a |
+| --- | --- | --- | --- |
+| `feature/<nome>` | `develop` | `develop` | una cosa nuova |
+| `bugfix/<nome>` | `develop` | `develop` | una correzione che non e' un'emergenza |
+| `release/<versione>` | `develop` | `master` **e** `develop` | congela la versione da pubblicare |
+| `hotfix/<versione>` | `master` | `master` **e** `develop` | ripara una release gia' pubblicata |
+
+```powershell
+git flow feature start <nome>     # apre il ramo da develop
+git flow feature finish <nome>    # lo chiude e lo unisce a develop
+git flow release start 1.0.4      # congela: da qui in poi solo correzioni
+git flow release finish 1.0.4     # unisce a master, tagga v1.0.4 e riporta su develop
+git flow hotfix start 1.0.4       # come release, ma parte da master
+git flow hotfix finish 1.0.4
+```
+
+`release finish` e `hotfix finish` creano da soli il tag `v<versione>` (prefisso
+`gitflow.prefix.versiontag`), quindi la versione del tag e quella in `pubspec.yaml` devono
+combaciare.
+
+### Versioni e tag
+
+| dove | `version:` in pubspec.yaml | tag | come esce |
+| --- | --- | --- | --- |
+| `develop` | la versione **in sviluppo**, es. `1.0.4+5` | `v1.0.4-SNAPSHOT` | pre-release, non tocca la "latest" |
+| `master` | la versione **pubblicata**, es. `1.0.4+5` | `v1.0.4` | release, diventa la "latest" |
+
+- Il suffisso `-SNAPSHOT` sta **solo nel tag**, mai nel `version:` di `pubspec.yaml`: iOS
+  (`CFBundleShortVersionString`) accetta solo numeri e il suffisso finirebbe dentro l'app.
+- `develop` porta sempre la versione **successiva**: pubblicata la `1.0.4`, `develop` passa a
+  `1.0.5+6`. Il numero dopo il `+` e' il `versionCode` di Android, sale di uno a ogni release e
+  **non cala mai** (vedi "Comandi"); l'etichetta `-SNAPSHOT` vive solo nel nome del file, quindi
+  l'app dice comunque `1.0.4+5`.
+- Un tag snapshot va messo su un commit il cui `pubspec.yaml` porta **proprio quella versione**,
+  altrimenti la pipeline avvisa con un `::warning::` e il file esce con l'etichetta del tag.
+
 ## Git
 
-- `main` = **un solo commit con albero vuoto** (0 file), per scelta dell'utente.
-- `develop` = ramo di `main` con tutto il lavoro; `main` e' antenato di `develop`.
-- Si lavora su `develop`. Commit in italiano, push **solo se richiesto**.
+- Rami stabili `master` (produzione) e `develop` (integrazione): vedi "Git flow".
+- Si lavora su `develop` o su un ramo `feature/*`, `bugfix/*`, `release/*`, `hotfix/*`.
+- Commit in italiano, push **solo se richiesto**.
