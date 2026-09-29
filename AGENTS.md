@@ -314,8 +314,11 @@ riusabili, uno per blocco di lavoro, con il nome di quello che fanno.
   un `::warning::` e la release resta comunque valida.
 - La notifica ha `continue-on-error: true`: Telegram e' un di piu', e un rifiuto (token scaduto,
   bot bloccato, rate limit) non deve rendere rosso un run che ha gia' pubblicato la release.
-- L'`flutter analyze` del workflow e' **non bloccante** (`continue-on-error`): i 12 `info`
-  preesistenti farebbero altrimenti fallire la build.
+- L'`flutter analyze` del workflow e' **non bloccante**: i 12 `info` preesistenti farebbero
+  altrimenti fallire la build. Lo step finisce con `|| echo "::warning::..."` e non con
+  `continue-on-error`: uno step "ammesso al fallimento" lascia comunque sul job l'annotazione
+  rossa *Process completed with exit code 1*, e un job che sembra sempre rotto non lo guarda
+  piu' nessuno. Cosi' il codice di uscita resta zero e resta un avviso arancione.
 
 ### Secondo canale: il repository privato
 

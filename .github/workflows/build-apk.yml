@@ -59,9 +59,13 @@ jobs:
 
       # `flutter analyze` exits with code 1 because of the 12 pre-existing `info` lints in
       # lib/main.dart, so here it is informative only and must not fail the build.
+      #
+      # `|| echo` instead of `continue-on-error`: a step allowed to fail still leaves a red
+      # "Process completed with exit code 1" annotation on the job, and a job that always
+      # looks broken stops being read. This way the exit code stays zero and what is left is
+      # an orange warning that says where to look.
       - name: Static analysis (not blocking)
-        run: flutter analyze lib
-        continue-on-error: true
+        run: flutter analyze lib || echo "::warning::flutter analyze reported findings, see the log of this step"
 
       # The release is signed with the debug key (android/app/build.gradle.kts): fine for
       # sideloading, not for publishing on the Play Store.
