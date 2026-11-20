@@ -12,18 +12,6 @@
 # Le action sono fissate ai tag di major mobili (vN): si aggiornano a mano. Da v5/v6
 # in poi girano su Node 24 e vogliono un runner >= 2.327.1: `ubuntu-latest` va bene,
 # su runner self-hosted no. `subosito/flutter-action` e' l'unica ancora a `v2`.
-#
-# Nome del file: l'APK allegato alla release si chiama **sempre**
-# `MTG-Life-Counter.apk`, senza versione. La versione continua a esistere dentro
-# l'APK (`--build-name`/`--build-number`, quindi nome e versionCode li vede Android),
-# ma il nome del file non cambia piu': cosi' il link di download e' uno solo e
-# sopravvive alle versioni, perche' `releases/latest` risolve da se' l'ultima
-# release pubblicata:
-#
-#   https://github.com/axel9674/mtg_lifecounter/releases/latest/download/MTG-Life-Counter.apk
-#
-# Attenzione: `latest` salta le release marcate come prerelease. Se una release
-# serve a tutti va pubblicata normale, altrimenti il link resta alla precedente.
 name: Build APK e release
 
 on:
@@ -46,11 +34,9 @@ jobs:
     name: Build APK release
     runs-on: ubuntu-latest
     # Il nome del file APK viaggia fino al job della release, che lo usa per il
-    # link diretto da mandare su Telegram. E' fisso di proposito: il link pubblico
-    # non deve cambiare quando cambia la versione.
+    # link diretto da mandare su Telegram.
     outputs:
       file: ${{ steps.versione.outputs.file }}
-      etichetta: ${{ steps.versione.outputs.etichetta }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -102,10 +88,7 @@ jobs:
           fi
           echo "nome=$nome" >> "$GITHUB_OUTPUT"
           echo "numero=$numero" >> "$GITHUB_OUTPUT"
-          # Nome fisso: la versione non entra nel nome del file, altrimenti il
-          # link di download cambierebbe a ogni release.
-          echo "file=MTG-Life-Counter.apk" >> "$GITHUB_OUTPUT"
-          echo "etichetta=$nome (build $numero)" >> "$GITHUB_OUTPUT"
+          echo "file=MTG-Life-Counter-$nome-build$numero.apk" >> "$GITHUB_OUTPUT"
           echo "Versione $nome+$numero"
 
       # La release e' firmata con la debug key (android/app/build.gradle.kts): va bene
@@ -116,10 +99,8 @@ jobs:
             --build-name "${{ steps.versione.outputs.nome }}" \
             --build-number "${{ steps.versione.outputs.numero }}"
 
-      # Nome del file: sempre MTG-Life-Counter.apk. La versione non si perde:
-      # sta dentro l'APK (build-name e build-number), e la release la dice nel
-      # titolo. `tool/build_apk.ps1` invece tiene la versione nel nome, ma quello
-      # resta sul PC: nessuno lo scarica da un link.
+      # Nome del file: MTG-Life-Counter-<versione>-build<numero>.apk. Uguale a quello
+      # che produce `tool/build_apk.ps1` per lo stesso commit.
       - name: Prepara l'artefatto
         run: |
           mkdir -p dist
@@ -156,11 +137,8 @@ jobs:
             APK per il sideload: la build e' firmata con la debug key, quindi non
             va pubblicata sul Play Store.
 
-            Link stabile, sempre quest'ultima versione:
-            https://github.com/${{ github.repository }}/releases/latest/download/MTG-Life-Counter.apk
-
             Installazione: copiare l'APK sul telefono e aprirlo, oppure
-            `adb install -r MTG-Life-Counter.apk`.
+            `adb install -r MTG-Life-Counter-*.apk`.
 
       # Avviso su Telegram con il link diretto all'APK pubblicato. Servono due
       # segreti del repository:
@@ -180,9 +158,7 @@ jobs:
           fi
 
           repo="https://github.com/$GITHUB_REPOSITORY"
-          # Link stabile: `latest` risolve da se' l'ultima release pubblicata, cosi'
-          # il messaggio (e il pulsante dell'app dei tornei) non cambiano mai.
-          apk_url="$repo/releases/latest/download/$APK_FILE"
+          apk_url="$repo/releases/download/$TAG/$APK_FILE"
           release_url="$repo/releases/tag/$TAG"
 
           # Il tag finisce nel messaggio in HTML: l'escaping evita che un
