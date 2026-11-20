@@ -392,6 +392,16 @@ const String _kPoisonVisibleKey = 'poisonVisible';
 /// viene refertata o il torneo si chiude.
 const String _kTavoloKey = 'tavoloCodice';
 
+/// Turni di recupero della partita in corso, quando il tempo e' scaduto con il
+/// gioco ancora aperto. Il formato e' `attivo:turno` (es. `a:2`), e il turno va
+/// da 0 a [kTurniRecupero]: dopo l'ultimo la partita e' un pareggio. Vuoto =
+/// nessun recupero in corso.
+const String _kRecuperoKey = 'turniRecupero';
+
+/// Quanti turni si giocano dopo il tempo: il giocatore attivo chiude quello in
+/// corso (turno 0) e poi se ne giocano altri cinque, poi e' pareggio.
+const int kTurniRecupero = 5;
+
 /// Impostazioni del timer di partita: se e' acceso, quanto dura e quanto tempo
 /// resta. Il timer fermo resta fermo anche riaprendo l'app: a farlo ripartire
 /// e' un tocco sul suo box.
@@ -470,6 +480,14 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   bool _tavoloOccupato = false;
 
   static const TavoloApi _apiTavolo = TavoloApi();
+
+  /// Turni di recupero: `-1` = non iniziati, `0..kTurniRecupero` = a che punto
+  /// siamo, `kTurniRecupero + 1` = finiti (pareggio).
+  int _recuperoTurno = -1;
+
+  /// Chi ha il turno adesso: `a` o `b` (i due lati del tavolo). `null` finche'
+  /// nessuno l'ha dichiarato.
+  String? _recuperoAttivo;
 
   static const int _diceSides = 20;
 
@@ -654,6 +672,16 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     });
     if (running) {
       _startTicker();
+    }
+
+    final recupero = prefs.getString(_kRecuperoKey);
+    if (recupero != null && recupero.contains(':')) {
+      final parti = recupero.split(':');
+      final turno = parti.length > 1 ? int.tryParse(parti[1]) : null;
+      if (turno != null) {
+        _recuperoTurno = turno;
+        _recuperoAttivo = parti[0].isEmpty ? null : parti[0];
+      }
     }
 
     // Il collegamento al tavolo si rilegge in sottofondo: se il torneo non
@@ -1025,6 +1053,7 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       _timerDeadline = null;
     });
     unawaited(_saveGame());
+    unawaited(_proponiTurniRecupero());
   }
 
   void _pauseTimer() {
@@ -1066,6 +1095,7 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     unawaited(HapticFeedback.heavyImpact());
     unawaited(_playTimerAlarm());
     unawaited(_saveGame());
+    unawaited(_proponiTurniRecupero());
   }
 
   /// Apre le impostazioni del timer: acceso/spento, durata in minuti e azzera.
@@ -1138,12 +1168,18 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
 
     final azione = await showDialog<String>(
       context: context,
-      builder: (_) => _TavoloDialog(tavolo: tavolo),
+      builder: (_) => _TavoloDialog(
+        tavolo: tavolo,
+        recuperoTurno: _recuperoTurno,
+        recuperoAttivo: _recuperoAttivo,
+      ),
     );
     if (azione == null || !mounted) return;
     switch (azione) {
       case 'referta':
         await _refertaTavolo(tavolo);
+      case 'recupero':
+        await _mostraTurniRecupero();
       case 'aggiorna':
         await _aggiornaTavolo(avvisa: true);
       case 'scollega':
@@ -1157,7 +1193,14 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       final tavolo = await _apiTavolo.leggi(codice);
       await _salvaTavolo(tavolo.codice);
       if (!mounted) return;
-      setState(() => _tavolo = tavolo);
+      setState(() {
+        _tavolo = tavolo;
+        // Un tavolo nuovo e' una partita nuova: i turni di recupero di quella
+        // prima non c'entrano piu'.
+        _recuperoTurno = -1;
+        _recuperoAttivo = null;
+      });
+      unawaited(_salvaRecupero());
       _avviso('Collegato: ${tavolo.etichetta}');
     } on TavoloErrore catch (errore) {
       _avviso(errore.messaggio);
@@ -1180,6 +1223,64 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     }
   }
 
+  Future<void> _salvaRecupero() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (_recuperoTurno < 0) {
+        await prefs.remove(_kRecuperoKey);
+      } else {
+        await prefs.setString(
+          _kRecuperoKey,
+          '${_recuperoAttivo ?? ''}:$_recuperoTurno',
+        );
+      }
+    } catch (_) {
+      // Senza memoria il recupero vale per questa sessione: non e' un guaio.
+    }
+  }
+
+  /// Quando il tempo finisce con una partita agganciata e ancora da refertare,
+  /// si apre il conteggio dei turni di recupero.
+  ///
+  /// Solo a tavolo collegato: senza torneo il tempo che scade e' solo il tempo
+  /// che scade, e un conteggio che nessuno registra sarebbe confusione.
+  Future<void> _proponiTurniRecupero() async {
+    final tavolo = _tavolo;
+    if (tavolo == null || !tavolo.canReport || _recuperoTurno >= 0) return;
+    if (!mounted) return;
+    await _mostraTurniRecupero();
+  }
+
+  Future<void> _mostraTurniRecupero() async {
+    final tavolo = _tavolo;
+    if (tavolo == null) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (_) => TurniRecuperoDialog(
+        nomeA: tavolo.giocatoreA,
+        nomeB: tavolo.giocatoreB ?? 'Avversario',
+        attivo: _recuperoAttivo,
+        turno: _recuperoTurno,
+        onScegliAttivo: (lato) {
+          setState(() {
+            _recuperoAttivo = lato;
+            _recuperoTurno = 0;
+          });
+          unawaited(_salvaRecupero());
+        },
+        onFineTurno: () {
+          setState(() => _recuperoTurno += 1);
+          unawaited(_salvaRecupero());
+        },
+        onPareggio: () {
+          Navigator.of(context).pop();
+          unawaited(_refertaTavolo(tavolo, preseleziona: 'draw'));
+        },
+      ),
+    );
+  }
+
   Future<void> _scollegaTavolo() async {
     await _salvaTavolo(null);
     if (!mounted) return;
@@ -1200,10 +1301,16 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     }
   }
 
-  Future<void> _refertaTavolo(TavoloCollegato tavolo) async {
+  Future<void> _refertaTavolo(
+    TavoloCollegato tavolo, {
+    String? preseleziona,
+  }) async {
     final esito = await showDialog<_EsitoReferto>(
       context: context,
-      builder: (_) => _RefertaTavoloDialog(tavolo: tavolo),
+      builder: (_) => _RefertaTavoloDialog(
+        tavolo: tavolo,
+        preseleziona: preseleziona,
+      ),
     );
     if (esito == null || !mounted) return;
     setState(() => _tavoloOccupato = true);
@@ -1220,7 +1327,12 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       // mostrare in menu un tavolo che non esiste piu'.
       await _salvaTavolo(null);
       if (!mounted) return;
-      setState(() => _tavolo = null);
+      setState(() {
+        _tavolo = null;
+        _recuperoTurno = -1;
+        _recuperoAttivo = null;
+      });
+      unawaited(_salvaRecupero());
       _avviso(
         'Refertato: ${aggiornato.risultatoLeggibile ?? 'risultato scritto'} · '
         'tavolo scollegato',
@@ -3828,9 +3940,17 @@ class _CollegaTavoloDialogState extends State<_CollegaTavoloDialog> {
 
 /// Lo stato del tavolo, con le due cose che si fanno: refertare o scollegare.
 class _TavoloDialog extends StatelessWidget {
-  const _TavoloDialog({required this.tavolo});
+  const _TavoloDialog({
+    required this.tavolo,
+    this.recuperoTurno = -1,
+    this.recuperoAttivo,
+  });
 
   final TavoloCollegato tavolo;
+
+  /// `-1` = nessun recupero in corso; altrimenti il turno raggiunto.
+  final int recuperoTurno;
+  final String? recuperoAttivo;
 
   @override
   Widget build(BuildContext context) {
@@ -3870,6 +3990,15 @@ class _TavoloDialog extends StatelessWidget {
               style: appTextStyle(fontSize: 12.5, color: Colors.orangeAccent),
             ),
           ],
+          if (recuperoTurno >= 0) ...[
+            const SizedBox(height: 10),
+            Text(
+              recuperoTurno >= kTurniRecupero
+                  ? 'Turni di recupero finiti: e\' pareggio'
+                  : 'Turni di recupero: ${recuperoTurno + 1} di ${kTurniRecupero + 1}',
+              style: appTextStyle(fontSize: 12.5, color: Colors.orangeAccent),
+            ),
+          ],
           const SizedBox(height: 10),
           Text(
             'Codice ${tavolo.codice}',
@@ -3890,6 +4019,11 @@ class _TavoloDialog extends StatelessWidget {
           onPressed: () => Navigator.of(context).pop('aggiorna'),
           child: const Text('Aggiorna'),
         ),
+        if (tavolo.canReport && recuperoTurno >= 0)
+          TextButton(
+            onPressed: () => Navigator.of(context).pop('recupero'),
+            child: const Text('Turni di recupero'),
+          ),
         if (tavolo.canReport)
           FilledButton(
             onPressed: () => Navigator.of(context).pop('referta'),
@@ -3906,9 +4040,13 @@ class _TavoloDialog extends StatelessWidget {
 /// il pareggio — invece di due campi liberi: un 1-2 dichiarato vittoria
 /// falserebbe la percentuale dei game, e il server lo rifiuterebbe comunque.
 class _RefertaTavoloDialog extends StatefulWidget {
-  const _RefertaTavoloDialog({required this.tavolo});
+  const _RefertaTavoloDialog({required this.tavolo, this.preseleziona});
 
   final TavoloCollegato tavolo;
+
+  /// Scelta già messa: `draw` quando il referto arriva alla fine dei turni di
+  /// recupero, dove il pareggio è l'esito, non una delle tre possibilità.
+  final String? preseleziona;
 
   @override
   State<_RefertaTavoloDialog> createState() => _RefertaTavoloDialogState();
@@ -3917,6 +4055,12 @@ class _RefertaTavoloDialog extends StatefulWidget {
 class _RefertaTavoloDialogState extends State<_RefertaTavoloDialog> {
   /// `player_a`, `player_b` o `draw`.
   String? _scelta;
+
+  @override
+  void initState() {
+    super.initState();
+    _scelta = widget.preseleziona;
+  }
 
   /// Quanti game ha lasciato all'avversario chi vince: 0 = 2-0, 1 = 2-1.
   int _gamePersi = 0;
@@ -4071,5 +4215,145 @@ class _GameScelta extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// Il conteggio dei turni di recupero, dopo che il tempo è finito.
+///
+/// La regola è quella dei tornei: chi è di turno quando scade il tempo chiude il
+/// turno in corso (turno 0), poi si giocano cinque turni — tre per uno — e se la
+/// partita è ancora aperta è **pareggio**. Il conteggio resta sul telefono e
+/// viene ricordato: se l'app si chiude a metà, si riprende dal punto giusto.
+class TurniRecuperoDialog extends StatefulWidget {
+  const TurniRecuperoDialog({
+    super.key,
+    required this.nomeA,
+    required this.nomeB,
+    required this.attivo,
+    required this.turno,
+    required this.onScegliAttivo,
+    required this.onFineTurno,
+    required this.onPareggio,
+  });
+
+  final String nomeA;
+  final String nomeB;
+  final String? attivo;
+  final int turno;
+  final void Function(String lato) onScegliAttivo;
+  final VoidCallback onFineTurno;
+  final VoidCallback onPareggio;
+
+  @override
+  State<TurniRecuperoDialog> createState() => _TurniRecuperoDialogState();
+}
+
+class _TurniRecuperoDialogState extends State<TurniRecuperoDialog> {
+  late String? _attivo = widget.attivo;
+  late int _turno = widget.turno;
+
+  String get _nomeAttivo => _attivo == 'b' ? widget.nomeB : widget.nomeA;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1B1B1B),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      title: Text(
+        _attivo == null ? 'Tempo scaduto' : 'Turni di recupero',
+        style: appTextStyle(fontSize: 22, weight: 800, letterSpacing: 1),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: _attivo == null ? _sceltaDelTurno() : _conteggio(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Più tardi'),
+        ),
+        if (_attivo != null)
+          FilledButton(
+            onPressed: _turno >= kTurniRecupero
+                ? () {
+                    widget.onPareggio();
+                    Navigator.of(context).pop();
+                  }
+                : () {
+                    setState(() => _turno += 1);
+                    widget.onFineTurno();
+                  },
+            child: Text(
+              _turno >= kTurniRecupero ? 'Referta pareggio' : 'Fine turno',
+            ),
+          ),
+      ],
+    );
+  }
+
+  List<Widget> _sceltaDelTurno() {
+    return [
+      Text(
+        'Il tempo è finito ma la partita è ancora aperta: chi sta giocando il '
+        'turno chiude questo, poi se ne giocano cinque.',
+        style: appTextStyle(fontSize: 14, color: Colors.white70),
+      ),
+      const SizedBox(height: 14),
+      Text(
+        'Chi ha il turno adesso?',
+        style: appTextStyle(fontSize: 15, weight: 700),
+      ),
+      const SizedBox(height: 10),
+      _SceltaReferto(
+        etichetta: widget.nomeA,
+        scelta: false,
+        onTap: () {
+          setState(() {
+            _attivo = 'a';
+            _turno = 0;
+          });
+          widget.onScegliAttivo('a');
+        },
+      ),
+      _SceltaReferto(
+        etichetta: widget.nomeB,
+        scelta: false,
+        onTap: () {
+          setState(() {
+            _attivo = 'b';
+            _turno = 0;
+          });
+          widget.onScegliAttivo('b');
+        },
+      ),
+    ];
+  }
+
+  List<Widget> _conteggio() {
+    final finiti = _turno >= kTurniRecupero;
+    return [
+      Text(
+        finiti ? 'Turni di recupero finiti' : 'Turno $_turno',
+        style: appTextStyle(fontSize: 34, weight: 800, letterSpacing: 1),
+      ),
+      const SizedBox(height: 6),
+      Text(
+        finiti
+            ? 'La partita è un pareggio: refertalo per chiudere il tavolo.'
+            : 'Ha il turno $_nomeAttivo. Ogni "Fine turno" passa la mano; dopo '
+                  'il turno $kTurniRecupero è pareggio.',
+        style: appTextStyle(fontSize: 13.5, color: Colors.white70),
+      ),
+      const SizedBox(height: 10),
+      Text(
+        'Turno ${_turno.clamp(0, kTurniRecupero)} di $kTurniRecupero',
+        style: appTextStyle(
+          fontSize: 12,
+          letterSpacing: 1.5,
+          color: Colors.white38,
+        ),
+      ),
+    ];
   }
 }
