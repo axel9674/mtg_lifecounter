@@ -1215,9 +1215,15 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
         gamesVintiB: esito.gamesB,
       );
       if (!mounted) return;
-      setState(() => _tavolo = aggiornato);
+      // Scritto il risultato, il codice di quel tavolo ha finito il suo lavoro:
+      // il turno dopo ne porta uno nuovo. Restare agganciati vorrebbe dire
+      // mostrare in menu un tavolo che non esiste piu'.
+      await _salvaTavolo(null);
+      if (!mounted) return;
+      setState(() => _tavolo = null);
       _avviso(
-        'Refertato: ${aggiornato.risultatoLeggibile ?? 'risultato scritto'}',
+        'Refertato: ${aggiornato.risultatoLeggibile ?? 'risultato scritto'} · '
+        'tavolo scollegato',
       );
     } on TavoloErrore catch (errore) {
       _avviso(errore.messaggio);
