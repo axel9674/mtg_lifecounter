@@ -1,0 +1,137 @@
+# Uploads the files of a release to a private artifact repository (Nexus, Artifactory or any
+# server speaking the same generic upload), on top of the GitHub Release.
+#
+# Called by build-release.yml through `workflow_call`: it has no trigger of its own.
+#
+# This is a **side channel** and it must never hold the pipeline back: `release` does not
+# `need` this job, so the two run in parallel and the release is published whether the private
+# repository answers or not. On top of that, no step of this file can fail the run: whatever
+# goes wrong here comes out as a `::warning::` and the step exits 0 anyway (see
+# `Upload with curl` below).
+#
+# The upload is a `PUT` with the file as the body and HTTP basic auth, which is what both
+# Nexus and Artifactory expect on a generic repository:
+#
+#   PUT <url>/<repository>/<path>/<file>
+#
+# so `url` has to stop at the path segment that identifies the instance: see its description
+# below.
+name: Private repository
+
+on:
+  workflow_call:
+    inputs:
+      path:
+        description: Folder created inside the repository, normally the release label.
+        required: true
+        type: string
+      ios-result:
+        description: Result of the `ios` job (`success` only when the IPA really is there).
+        required: true
+        type: string
+      # The two values below can be overridden from Settings > Variables without touching
+      # this file: the default written here is the one used when the variable is not set.
+      url:
+        description: Base URL of the instance, up to the `/repository` (or `/artifactory`) segment.
+        required: false
+        type: string
+        default: ${{ vars.PRIVATE_REPO_URL || 'https://repository.axelhome.me/repository' }}
+      repository:
+        description: Name of the target repository inside the instance.
+        required: false
+        type: string
+        default: ${{ vars.PRIVATE_REPO_NAME || 'mtg-lifecounter' }}
+      directory:
+        description: Folder holding the files to upload.
+        required: false
+        type: string
+        default: dist
+    secrets:
+      # Optional on purpose: without them the upload is skipped with a warning.
+      username:
+        description: User for the basic auth.
+        required: false
+      password:
+        description: Password for the basic auth.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Upload the files
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the APK
+        uses: actions/download-artifact@v8
+        with:
+          name: mtg-lifecounter-apk
+          path: dist
+
+      - name: Download the IPA
+        if: inputs.ios-result == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          name: mtg-lifecounter-ipa
+          path: dist
+
+      # A failure here must not turn red the run that has already published the release, and
+      # must not leave a red "Process completed with exit code 1" annotation on a green job
+      # either (the same noise the static analysis step of build-apk.yml used to make). So the
+      # step reports every problem with a `::warning::` and exits 0 in every case.
+      #
+      # **When the server answers**, and only if an upload that does not go through has to be
+      # a real failure, replace the `warning` with `error` and the final `exit 0` with
+      # `exit 1`: the release is published by its own job either way, so the pipeline is never
+      # held back by what happens here.
+      #
+      # `--upload-file` sends the file with a PUT and streams it, so a 40 MB APK is not read
+      # into memory. `--fail-with-body` turns an HTTP error into a non-zero exit code and
+      # still prints the answer of the server, which on a repository is where the reason is
+      # written ("401 Unauthorized", "400 Bad Request", ...).
+      - name: Upload with curl
+        env:
+          REPO_URL: ${{ inputs.url }}
+          REPO_NAME: ${{ inputs.repository }}
+          REPO_PATH: ${{ inputs.path }}
+          REPO_USER: ${{ secrets.username }}
+          REPO_PASSWORD: ${{ secrets.password }}
+          DIST: ${{ inputs.directory }}
+        run: |
+          if [ -z "$REPO_USER" ] || [ -z "$REPO_PASSWORD" ]; then
+            echo "::warning::PRIVATE_REPO_USER/PRIVATE_REPO_PASSWORD are not set: upload skipped."
+            exit 0
+          fi
+
+          shopt -s nullglob
+          files=("$DIST"/*.apk "$DIST"/*.ipa)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::warning::no .apk or .ipa file in $DIST: nothing to upload."
+            exit 0
+          fi
+
+          # Trailing slashes are dropped so the caller can write the URL with or without them.
+          base="${REPO_URL%/}/${REPO_NAME}/${REPO_PATH%/}"
+
+          # The failures are counted instead of stopping the loop: one file that does not go
+          # through must not keep the others on the ground.
+          failed=0
+          for file in "${files[@]}"; do
+            name="$(basename "$file")"
+            echo "Uploading $name to $base/"
+            if ! curl -sS --fail-with-body --retry 3 --retry-connrefused \
+              --upload-file "$file" \
+              --user "$REPO_USER:$REPO_PASSWORD" \
+              "$base/$name"; then
+              echo "::warning::upload of $name to $base/ failed"
+              failed=$((failed + 1))
+            fi
+          done
+
+          if [ "$failed" -gt 0 ]; then
+            echo "::warning::$failed of ${#files[@]} file(s) did not reach $base/; the release on GitHub is not affected."
+            exit 0
+          fi
+
+          echo "Uploaded ${#files[@]} file(s) to $base/"

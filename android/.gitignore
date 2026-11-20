@@ -12,3 +12,10 @@ GeneratedPluginRegistrant.java
 key.properties
 **/*.keystore
 **/*.jks
+
+# Un'eccezione voluta: la chiave di firma di questa app sta nel repo (vedi il commento in
+# app/build.gradle.kts). Serve perche' la build locale e quella della pipeline firmino
+# **identiche**: senza, Android rifiuta l'aggiornamento e va disinstallato tutto, perdendo i
+# dati. Il repo e' privato, l'app e' personale e la chiave non si cambia piu'.
+# Tutte le altre chiavi restano fuori, come da regola qui sopra.
+!app/signing/mtg-lifecounter.jks

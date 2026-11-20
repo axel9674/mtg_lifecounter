@@ -1,0 +1,247 @@
+# Publishes the GitHub Release of a tag: it takes the artifacts built by build-apk.yml and
+# build-ipa.yml, writes the notes and announces the release on Telegram.
+#
+# Called by build-release.yml through `workflow_call`: it has no trigger of its own.
+name: GitHub Release
+
+on:
+  workflow_call:
+    inputs:
+      label:
+        description: Release label, e.g. `1.0.4` or `1.0.4-SNAPSHOT`.
+        required: true
+        type: string
+      tag:
+        description: Tag of the release, used to build the download URLs.
+        required: true
+        type: string
+      apk:
+        description: File name of the APK attached to the release.
+        required: true
+        type: string
+      ipa:
+        description: File name of the IPA attached to the release.
+        required: true
+        type: string
+      snapshot:
+        description: "`true` for a build of `develop` (tag carrying `-SNAPSHOT`)."
+        required: true
+        type: string
+      ios-result:
+        description: Result of the `ios` job (`success` only when the IPA really is there).
+        required: true
+        type: string
+    secrets:
+      # Optional on purpose: without them the notification is skipped with a warning and the
+      # release stays valid.
+      telegram-bot-token:
+        description: Bot token from BotFather.
+        required: false
+      telegram-chat-id:
+        description: Chat that receives the message.
+        required: false
+
+# Creating the release needs write access. It has to be declared here as well as in the
+# caller: a reusable workflow is granted only what the caller and the file itself both allow.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish the release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the APK
+        uses: actions/download-artifact@v8
+        with:
+          name: mtg-lifecounter-apk
+          path: dist
+
+      # The artifact exists only when the `ios` job ran and succeeded (`failure` and
+      # `skipped` do not match `success`): without the IPA the release ships the APK alone,
+      # and the notes below notice it through `IOS_RESULT`.
+      - name: Download the IPA
+        if: inputs.ios-result == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          name: mtg-lifecounter-ipa
+          path: dist
+
+      # The notes are in **English**, like the Telegram message: they are read by whoever
+      # lands on the release page from the outside, so they tell what the app is and how to
+      # install it, not what changed for whoever wrote it. The first paragraph tells the
+      # snapshot of `develop` apart from the release of `master`, because whoever gets here
+      # has to understand that straight away.
+      - name: Prepare the release notes
+        env:
+          APK_FILE: ${{ inputs.apk }}
+          IPA_FILE: ${{ inputs.ipa }}
+          SNAPSHOT: ${{ inputs.snapshot }}
+          IOS_RESULT: ${{ inputs.ios-result }}
+        run: |
+          if [ "$SNAPSHOT" = "true" ]; then
+            printf '%s\n' \
+              "> **Development build.** This is the current state of the \`develop\` branch," \
+              "> not a release: it is published as a pre-release, so the latest stable" \
+              "> version (built from \`master\`) is unaffected. Expect unfinished work -" \
+              "> features and appearance may still change." \
+              "" > note.md
+          else
+            : > note.md
+          fi
+
+          # The notes name the IPA **only when it really is there**: a promised attachment
+          # that never arrives reads worse than a release with a single file.
+          if [ "$IOS_RESULT" = "success" ]; then
+            has_ipa=true
+            attachments="Both the Android and the iOS build are attached to this release."
+            requirements="Android 7.0 (API 24) or newer, or iOS 15 or newer."
+          else
+            has_ipa=false
+            attachments="The Android build is attached to this release."
+            requirements="Android 7.0 (API 24) or newer."
+          fi
+
+          printf '%s\n' \
+            "A two-player life counter for Magic: The Gathering. $attachments" \
+            "" \
+            "### Downloads" \
+            "" \
+            "- **Android** - \`$APK_FILE\`, signed with the project's own key" >> note.md
+
+          if [ "$has_ipa" = true ]; then
+            printf '%s\n' "- **iOS** - \`$IPA_FILE\`, unsigned" >> note.md
+          fi
+
+          # The APK file name is fixed, so for a stable release there is also a link that
+          # always serves the current version. A snapshot is a pre-release and `latest`
+          # skips it, so there the link would point somewhere else: not printed at all.
+          if [ "$SNAPSHOT" != "true" ]; then
+            printf '%s\n' \
+              "" \
+              "Always the current version:" \
+              "<https://github.com/$GITHUB_REPOSITORY/releases/latest/download/$APK_FILE>" >> note.md
+          fi
+
+          printf '%s\n' \
+            "" \
+            "### Installing on Android" \
+            "" \
+            "Open the APK on the device (allow installs from unknown sources when asked)," \
+            "or, with the phone connected over USB, run \`adb install -r $APK_FILE\`." \
+            "The package is signed with a key that belongs to the project, so it is meant for" \
+            "sideloading and Google Play will not accept it. Every build is signed with that" \
+            "same key, so a newer one installs as a normal update and keeps your saved games." >> note.md
+
+          if [ "$has_ipa" = true ]; then
+            printf '%s\n' \
+              "" \
+              "### Installing on iOS" \
+              "" \
+              "The IPA is not signed and will not install with a double click. Sideload it" \
+              "with Sideloadly or AltStore: they re-sign it with your own Apple ID, and a" \
+              "signature made with a free Apple ID expires after 7 days." >> note.md
+          fi
+
+          printf '%s\n' \
+            "" \
+            "### Requirements" \
+            "" \
+            "$requirements The app interface is in Italian." \
+            "" \
+            "Source code, build instructions and every other release:" \
+            "https://github.com/$GITHUB_REPOSITORY" >> note.md
+
+          cat note.md
+
+      # The file names come from the `version` job: they are the same that
+      # `tool/build_apk.ps1` and the build on the phone give for the same commit.
+      # `prerelease` and `make_latest` are mirror images: only the release of `master` takes
+      # the "latest", the snapshot of `develop` does not.
+      - name: Publish the release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: MTG Life Counter ${{ inputs.label }}
+          body_path: note.md
+          prerelease: ${{ inputs.snapshot == 'true' }}
+          make_latest: ${{ inputs.snapshot != 'true' }}
+          files: |
+            dist/*.apk
+            dist/*.ipa
+          # Without the IPA the second pattern matches nothing: that is not an error.
+          fail_on_unmatched_files: false
+          generate_release_notes: true
+
+      # The notification is a bonus and has no say in the outcome of the run: with
+      # `continue-on-error` a refusal from Telegram (expired token, blocked bot, rate limit)
+      # does not turn red a run that has already published the release.
+      #
+      # The presence of the two secrets is checked in the script and not in an `if:`: the
+      # `secrets` context is not available in the `if:` of a step.
+      - name: Notify on Telegram
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.telegram-bot-token }}
+          TELEGRAM_CHAT_ID: ${{ secrets.telegram-chat-id }}
+          TAG: ${{ inputs.tag }}
+          APK_FILE: ${{ inputs.apk }}
+          IPA_FILE: ${{ inputs.ipa }}
+          SNAPSHOT: ${{ inputs.snapshot }}
+          IOS_RESULT: ${{ inputs.ios-result }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "::warning::TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID are not set: notification skipped."
+            exit 0
+          fi
+
+          repo="https://github.com/$GITHUB_REPOSITORY"
+          # A stable release takes the "latest" slot, and the APK name is fixed: the same
+          # link works for every release. A snapshot is a pre-release, which `latest`
+          # skips on purpose, so there the tag is the only honest address.
+          if [ "$SNAPSHOT" = "true" ]; then
+            apk_url="$repo/releases/download/$TAG/$APK_FILE"
+          else
+            apk_url="$repo/releases/latest/download/$APK_FILE"
+          fi
+          ipa_url="$repo/releases/download/$TAG/$IPA_FILE"
+          release_url="$repo/releases/tag/$TAG"
+
+          # The tag ends up in an HTML message: escaping stops a strange character
+          # (e.g. `&` or `<`) from breaking the parse done by Telegram.
+          title="${TAG//&/&amp;}"
+          title="${title//</&lt;}"
+          title="${title//>/&gt;}"
+
+          # The snapshot of develop announces itself as such: whoever reads the message has
+          # to know it is not the stable release. The IPA is named only when it is there
+          # (same rule as the notes, driven by `IOS_RESULT`).
+          if [ "$SNAPSHOT" = "true" ]; then
+            kind="Development build: not a release, the latest stable version is unchanged."
+          elif [ "$IOS_RESULT" = "success" ]; then
+            kind="New release: the Android APK and the iOS IPA are ready."
+          else
+            kind="New release: the Android APK is ready."
+          fi
+
+          lines=(
+            "<b>MTG Life Counter $title</b>"
+            "$kind"
+            ""
+            "<a href=\"$apk_url\">Android APK: $APK_FILE</a>"
+          )
+          if [ "$IOS_RESULT" = "success" ]; then
+            lines+=("<a href=\"$ipa_url\">iOS IPA (unsigned): $IPA_FILE</a>")
+          fi
+          lines+=("<a href=\"$release_url\">What's in this release</a>")
+
+          text="$(printf '%s\n' "${lines[@]}")"
+
+          # curl encodes the text: no hand-made escaping in the query string.
+          curl -sS --fail --retry 3 --retry-connrefused \
+            --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \
+            --data-urlencode "parse_mode=HTML" \
+            --data-urlencode "disable_web_page_preview=true" \
+            --data-urlencode "text=$text" \
+            "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" > /dev/null
+
+          echo "Notification sent for release $TAG"
