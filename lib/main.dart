@@ -293,6 +293,32 @@ class LifeCounterApp extends StatelessWidget {
     return MaterialApp(
       title: 'MTG Life Counter',
       theme: baseTheme.copyWith(
+        // L'app e' bianca e nera: il viola che Material si sceglie da solo nei
+        // pulsanti, negli switch e nei dialoghi non c'entra niente e si vedeva
+        // appena un widget standard finiva sotto le dita.
+        colorScheme: const ColorScheme.dark(
+          primary: Colors.white,
+          onPrimary: Colors.black,
+          secondary: Colors.white,
+          onSecondary: Colors.black,
+          surface: Color(0xFF1B1B1B),
+          onSurface: Colors.white,
+        ),
+        filledButtonTheme: FilledButtonThemeData(
+          style: FilledButton.styleFrom(
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.black,
+            textStyle: appTextStyle(fontSize: 15, weight: 700),
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+            shape: const StadiumBorder(),
+          ),
+        ),
+        textButtonTheme: TextButtonThemeData(
+          style: TextButton.styleFrom(
+            foregroundColor: Colors.white70,
+            textStyle: appTextStyle(fontSize: 15, weight: 600),
+          ),
+        ),
         textTheme: baseTheme.textTheme.apply(fontFamily: kAppFontFamily),
       ),
       home: LifeCounterHome(),
@@ -1259,42 +1285,15 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     setState(() => _recuperoVisibile = true);
   }
 
-  /// Il tasto della zona di un giocatore: dichiara il turno, passa la mano o
-  /// chiude la partita in pareggio.
-  Widget? _azioneRecupero(String lato) {
-    final tavolo = _tavolo;
-    if (!_recuperoVisibile || tavolo == null) return null;
-    final nome = lato == 'a' ? tavolo.giocatoreA : (tavolo.giocatoreB ?? 'Avversario');
-    final avversario = lato == 'a'
-        ? (tavolo.giocatoreB ?? 'Avversario')
-        : tavolo.giocatoreA;
-    return RecuperoAzione(
-      lato: lato,
-      nome: nome,
-      avversario: avversario,
-      attivo: _recuperoAttivo,
-      turno: _recuperoTurno,
-      onSonoDiTurno: () {
-        setState(() {
-          _recuperoAttivo = lato;
-          _recuperoTurno = 0;
-          _recuperoVisibile = true;
-        });
-        unawaited(_salvaRecupero());
-      },
-      onFineTurno: () {
-        setState(() => _recuperoTurno += 1);
-        unawaited(_salvaRecupero());
-      },
-      onPareggio: () => unawaited(_refertaTavolo(tavolo, preseleziona: 'draw')),
-      onNascondi: () => setState(() => _recuperoVisibile = false),
-    );
-  }
-
   Future<void> _scollegaTavolo() async {
     await _salvaTavolo(null);
     if (!mounted) return;
-    setState(() => _tavolo = null);
+    setState(() {
+      _tavolo = null;
+      _recuperoTurno = -1;
+      _recuperoAttivo = null;
+      _recuperoVisibile = false;
+    });
     _avviso('Scollegato dal tavolo: la partita resta.');
   }
 
@@ -1527,8 +1526,6 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
         // cifre girate di mezzo giro vuol dire sotto il contatore: il posto
         // libero per la scritta e' dall'altra parte.
         opponentLifeAbove: true,
-        azione: _azioneRecupero('a'),
-        azionePrima: true,
       ),
       second: PlayerZone(
         life: player2Life,
@@ -1546,11 +1543,13 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
         // il suo timer sta in fondo (in orizzontale in fondo alla meta' di
         // destra), quindi sopra il contatore c'e' posto per la scritta.
         opponentLifeAbove: true,
-        azione: _azioneRecupero('b'),
       ),
     );
 
-    if (!_timerOn && !_poisonVisible) return zones;
+    // Se non c'e' niente da appoggiare sopra le zone si torna subito ai
+    // contatori: i turni di recupero sono una di quelle cose.
+    final mostraRecupero = _recuperoVisibile && _tavolo != null;
+    if (!_timerOn && !_poisonVisible && !mostraRecupero) return zones;
 
     // Il box sta sopra la zona, non accanto: accendere il timer non cambia di
     // un pixel il contatore delle vite. Il verso e' quello delle cifre che gli
@@ -1644,6 +1643,77 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
       ),
     );
 
+    // I turni di recupero usano lo stesso linguaggio dei veleni: una pillola
+    // per zona, nell'angolo libero **opposto** a quello del veleno e lontano
+    // dal box del timer, che sta al centro del bordo esterno.
+    Widget recupero({
+      required Alignment alignment,
+      required int quarterTurns,
+      required String lato,
+      required EdgeInsets screenInsets,
+    }) => _FloatingPoison(
+      alignment: alignment,
+      insets: screenInsets,
+      child: RecuperoTurnoPill(
+        lato: lato,
+        nome: lato == 'a'
+            ? (_tavolo?.giocatoreA ?? 'Giocatore 1')
+            : (_tavolo?.giocatoreB ?? 'Avversario'),
+        avversario: lato == 'a'
+            ? (_tavolo?.giocatoreB ?? 'Avversario')
+            : (_tavolo?.giocatoreA ?? 'Giocatore 1'),
+        attivo: _recuperoAttivo,
+        turno: _recuperoTurno,
+        quarterTurns: quarterTurns,
+        onSonoDiTurno: () {
+          setState(() {
+            _recuperoAttivo = lato;
+            _recuperoTurno = 0;
+          });
+          unawaited(_salvaRecupero());
+        },
+        onFineTurno: () {
+          setState(() => _recuperoTurno += 1);
+          unawaited(_salvaRecupero());
+        },
+        onPareggio: () {
+          final tavolo = _tavolo;
+          if (tavolo != null) {
+            unawaited(_refertaTavolo(tavolo, preseleziona: 'draw'));
+          }
+        },
+        onNascondi: () => setState(() => _recuperoVisibile = false),
+      ),
+    );
+
+    final firstRecupero = recupero(
+      alignment: Alignment.topLeft,
+      quarterTurns: flipped ? 2 : 0,
+      lato: 'a',
+      screenInsets: EdgeInsets.only(left: insets.left, top: insets.top),
+    );
+    final secondRecupero = recupero(
+      alignment: Alignment.bottomRight,
+      quarterTurns: 0,
+      lato: 'b',
+      screenInsets: EdgeInsets.only(right: insets.right, bottom: insets.bottom),
+    );
+
+    final recuperi = wide
+        ? Row(
+            children: [
+              Expanded(child: firstRecupero),
+              const SizedBox(width: _ZoneDivider._thickness),
+              Expanded(child: secondRecupero),
+            ],
+          )
+        : Column(
+            children: [
+              Expanded(child: firstRecupero),
+              Expanded(child: secondRecupero),
+            ],
+          );
+
     // Come i timer, le due pillole ricalcano la disposizione delle zone: una
     // per meta' schermo, cosi' l'angolo e' quello della propria zona.
     final poisons = wide
@@ -1670,6 +1740,9 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
         if (_timerOn) Positioned.fill(child: flipped ? timers : firstTimer),
         // Una pillola per zona, ognuna nel verso di chi la legge.
         if (_poisonVisible) Positioned.fill(child: poisons),
+        // I turni di recupero quando servono: solo con un tavolo collegato e
+        // finche' la partita non e' refertata.
+        if (mostraRecupero) Positioned.fill(child: recuperi),
       ],
     );
   }
@@ -2377,18 +2450,7 @@ class PlayerZone extends StatelessWidget {
   final ValueChanged<int> onTogglePalette;
   final ValueChanged<Color> onColorSelected;
 
-  /// Tasto facoltativo della zona: oggi e' quello dei turni di recupero, che
-  /// deve stare dalla parte del giocatore che lo tocca.
-  final Widget? azione;
-
-  /// True mette il tasto **sopra** il contatore invece che sotto: la prima zona
-  /// ce l'ha in alto, verso il bordo esterno, perche' sotto c'e' il centro
-  /// dello schermo dove sta il menu, e li' i due si coprirebbero.
-  final bool azionePrima;
-
   const PlayerZone({
-    this.azione,
-    this.azionePrima = false,
     required this.life,
     required this.onIncrease,
     required this.onDecrease,
@@ -2466,11 +2528,6 @@ class PlayerZone extends StatelessWidget {
                         // bordo scoperto della card.
                         if (paletteVisible && cardGoesDown)
                           _ZoneCardHandle(cardColor: backgroundColor),
-                        if (azione != null && azionePrima)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 12),
-                            child: azione,
-                          ),
                         Expanded(
                           child: LifeCounterPanelTouch(
                             life: life,
@@ -2482,11 +2539,6 @@ class PlayerZone extends StatelessWidget {
                             opponentLifeAbove: opponentLifeAbove,
                           ),
                         ),
-                        if (azione != null && !azionePrima)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 12),
-                            child: azione,
-                          ),
                         if (paletteVisible && !cardGoesDown)
                           _ZoneCardHandle(cardColor: backgroundColor),
                       ],
@@ -4253,17 +4305,17 @@ class _GameScelta extends StatelessWidget {
   }
 }
 
-/// I tasti dei turni di recupero, dentro la zona di ogni giocatore.
+/// La pillola dei turni di recupero.
 ///
-/// Niente popup: quando il tempo finisce con un tavolo collegato, in fondo alle
-/// due zone compare un tasto per parte. Chi ha il turno tocca il suo, e da li'
-/// in poi il conteggio si fa da quella zona — cosi' il telefono resta la
-/// plancia di gioco e non si apre niente sopra.
+/// E' della stessa famiglia di quella del veleno: stessa altezza, stesso fondo
+/// scuro, stessa ombra, icona a sinistra e cifra a destra. Sta in un angolo
+/// libero della zona, sopra il contatore e mai sotto il box del timer.
 ///
-/// Fasi: `turno < 0` = nessuno ha ancora dichiarato il turno, `0..5` = si
-/// gioca, oltre [kTurniRecupero] = e' pareggio.
-class RecuperoAzione extends StatelessWidget {
-  const RecuperoAzione({
+/// Si tocca per dichiararsi di turno (la pillola bianca invita), poi per passare
+/// la mano; con i turni finiti referta il pareggio. Tenerla premuta la toglie,
+/// come si toglie un segnalino: la partita era gia' decisa.
+class RecuperoTurnoPill extends StatelessWidget {
+  const RecuperoTurnoPill({
     super.key,
     required this.lato,
     required this.nome,
@@ -4274,9 +4326,9 @@ class RecuperoAzione extends StatelessWidget {
     required this.onFineTurno,
     required this.onPareggio,
     required this.onNascondi,
+    this.quarterTurns = 0,
   });
 
-  /// `a` o `b`: il lato del tavolo di questa zona.
   final String lato;
   final String nome;
   final String avversario;
@@ -4286,86 +4338,112 @@ class RecuperoAzione extends StatelessWidget {
   final VoidCallback onFineTurno;
   final VoidCallback onPareggio;
   final VoidCallback onNascondi;
+  final int quarterTurns;
+
+  /// Le stesse misure della pillola del veleno: sono pillole sorelle.
+  static const double _fontSize = kNumberFontSize * 0.12;
+  static const double _numberWidth = kNumberFontSize * 0.1;
+  static const double _height = kNumberFontSize * 0.17;
+  static const double _iconSize = _fontSize * 0.62;
+  static const double _iconGap = _fontSize * 0.2;
+  static const double _padding = _fontSize * 0.32;
+
+  static const Color _idleBackground = Color(0xC0000000);
 
   bool get _mio => attivo == lato;
   bool get _finito => turno >= kTurniRecupero;
 
+  /// Nessuno ha ancora dichiarato il turno: le due pillole sono bianche, ed e'
+  /// il loro modo di dire "tocca la tua".
+  bool get _invito => attivo == null;
+
+  /// Solo la pillola che ha qualcosa da fare si tocca: quella dell'altro
+  /// giocatore mostra il conteggio e basta.
+  bool get _acceso => _invito || _mio;
+
+  String get _etichetta {
+    if (_invito) return 'Turni di recupero: tocca per dichiararti di turno';
+    if (_mio) {
+      return _finito
+          ? 'Turni di recupero finiti: tocca per refertare il pareggio'
+          : 'Turno $turno di $kTurniRecupero: tocca per chiudere il turno';
+    }
+    return 'Turno $turno di $kTurniRecupero: gioca $avversario';
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      // Velo scuro: la card sotto puo' essere di qualunque colore, e questo
-      // testo deve restare leggibile su tutte.
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: turno < 0 ? _scelta() : _conteggio(),
+    final foreground = _acceso ? Colors.black : Colors.white;
+
+    return RotatedBox(
+      quarterTurns: quarterTurns,
+      child: Semantics(
+        button: _acceso,
+        tooltip: _etichetta,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _acceso
+              ? (_invito
+                    ? onSonoDiTurno
+                    : _finito
+                    ? onPareggio
+                    : onFineTurno)
+              : null,
+          onLongPress: onNascondi,
+          child: Opacity(
+            opacity: _acceso ? 1 : 0.55,
+            child: Container(
+              height: _height,
+              padding: const EdgeInsets.symmetric(horizontal: _padding),
+              decoration: BoxDecoration(
+                color: _acceso ? Colors.white : _idleBackground,
+                borderRadius: BorderRadius.circular(_height / 2),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x66000000),
+                    blurRadius: 14,
+                    offset: Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    _invito
+                        ? Icons.hourglass_empty
+                        : _finito
+                        ? Icons.outlined_flag
+                        : Icons.hourglass_bottom,
+                    size: _iconSize,
+                    color: foreground,
+                  ),
+                  const SizedBox(width: _iconGap),
+                  if (_invito)
+                    Text(
+                      'TURNO',
+                      style: appTextStyle(
+                        fontSize: _fontSize * 0.85,
+                        weight: 800,
+                        letterSpacing: 0.5,
+                        color: foreground,
+                      ),
+                    )
+                  else
+                    FixedWidthNumber(
+                      '${turno.clamp(0, kTurniRecupero)}',
+                      width: _numberWidth,
+                      style: appNumberStyle(
+                        fontSize: _fontSize,
+                        color: foreground,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
-  }
-
-  List<Widget> _scelta() {
-    return [
-      Text(
-        'Tempo scaduto',
-        style: appTextStyle(fontSize: 12, letterSpacing: 1.2, color: Colors.white70),
-      ),
-      const SizedBox(height: 6),
-      Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          FilledButton(
-            onPressed: onSonoDiTurno,
-            child: Text('Sono di turno', style: appTextStyle(fontSize: 14, weight: 700)),
-          ),
-          const SizedBox(width: 4),
-          IconButton(
-            onPressed: onNascondi,
-            tooltip: 'Non serve: la partita è finita',
-            iconSize: 18,
-            visualDensity: VisualDensity.compact,
-            icon: const Icon(Icons.close, color: Colors.white54),
-          ),
-        ],
-      ),
-    ];
-  }
-
-  List<Widget> _conteggio() {
-    if (!_mio) {
-      return [
-        Text(
-          _finito
-              ? 'Pareggio: refertalo'
-              : 'Turno ${turno.clamp(0, kTurniRecupero)} di $kTurniRecupero',
-          style: appTextStyle(fontSize: 13, color: Colors.white70),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          _finito ? 'Pareggio' : 'Gioca $avversario',
-          style: appTextStyle(fontSize: 11.5, color: Colors.white38),
-        ),
-      ];
-    }
-
-    return [
-      Text(
-        _finito
-            ? 'Turni di recupero finiti'
-            : 'Turno ${turno.clamp(0, kTurniRecupero)} di $kTurniRecupero',
-        style: appTextStyle(fontSize: 12, letterSpacing: 1.2, color: Colors.white70),
-      ),
-      const SizedBox(height: 6),
-      FilledButton(
-        onPressed: _finito ? onPareggio : onFineTurno,
-        child: Text(
-          _finito ? 'Referta pareggio' : 'Fine turno',
-          style: appTextStyle(fontSize: 14, weight: 700),
-        ),
-      ),
-    ];
   }
 }
