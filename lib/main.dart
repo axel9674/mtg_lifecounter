@@ -3516,14 +3516,16 @@ class _PoisonCounter extends StatefulWidget {
   static const double _iconGap = _fontSize * 0.2;
   static const double _padding = _fontSize * 0.3;
 
+  /// Pillola spenta: lo stesso scuro degli altri box fluttuanti, cosi' si legge
+  /// sopra le cifre senza nasconderle.
+  static const Color _idleBackground = Color(0xC0000000);
+
   /// Pausa fra due passi mentre il dito resta premuto: come per la vita il
   /// primo segnalino si toglie subito, poi la pillola va da sola.
   static const Duration _holdStep = Duration(milliseconds: 140);
 
   /// Pillola spenta: lo stesso scuro degli altri box fluttuanti, cosi' si legge
   /// sopra le cifre senza nasconderle.
-  static const Color _idleBackground = Color(0xC0000000);
-
   /// Pillola avvelenata a morte ([kLethalPoison] segnalini): si accende di
   /// verde, che e' il colore con cui i veleni si riconoscono al tavolo.
   static const Color _lethalBackground = Color(0xF2AEEA00);
@@ -4348,18 +4350,12 @@ class RecuperoTurnoPill extends StatelessWidget {
   static const double _iconGap = _fontSize * 0.2;
   static const double _padding = _fontSize * 0.32;
 
-  static const Color _idleBackground = Color(0xC0000000);
-
   bool get _mio => attivo == lato;
   bool get _finito => turno >= kTurniRecupero;
 
   /// Nessuno ha ancora dichiarato il turno: le due pillole sono bianche, ed e'
   /// il loro modo di dire "tocca la tua".
   bool get _invito => attivo == null;
-
-  /// Solo la pillola che ha qualcosa da fare si tocca: quella dell'altro
-  /// giocatore mostra il conteggio e basta.
-  bool get _acceso => _invito || _mio;
 
   String get _etichetta {
     if (_invito) return 'Turni di recupero: tocca per dichiararti di turno';
@@ -4373,30 +4369,47 @@ class RecuperoTurnoPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final foreground = _acceso ? Colors.black : Colors.white;
+    // Chi non ha il turno non ha un pulsante: una pillola spenta sembrava
+    // comunque una cosa da toccare, e il turno sembrava passare avanti e
+    // indietro. Qui resta solo la scritta, che si legge e basta.
+    if (!_invito && !_mio) {
+      return RotatedBox(
+        quarterTurns: quarterTurns,
+        child: Semantics(
+          label: _etichetta,
+          child: Text(
+            'Turno ${turno.clamp(0, kTurniRecupero)}',
+            style: appTextStyle(
+              fontSize: _fontSize * 0.55,
+              weight: 700,
+              letterSpacing: 1,
+              color: Colors.white54,
+            ),
+          ),
+        ),
+      );
+    }
+
+    final foreground = Colors.black;
 
     return RotatedBox(
       quarterTurns: quarterTurns,
       child: Semantics(
-        button: _acceso,
+        button: true,
         tooltip: _etichetta,
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: _acceso
-              ? (_invito
-                    ? onSonoDiTurno
-                    : _finito
-                    ? onPareggio
-                    : onFineTurno)
-              : null,
+          onTap: _invito
+              ? onSonoDiTurno
+              : _finito
+              ? onPareggio
+              : onFineTurno,
           onLongPress: onNascondi,
-          child: Opacity(
-            opacity: _acceso ? 1 : 0.55,
-            child: Container(
+          child: Container(
               height: _height,
               padding: const EdgeInsets.symmetric(horizontal: _padding),
               decoration: BoxDecoration(
-                color: _acceso ? Colors.white : _idleBackground,
+                color: Colors.white,
                 borderRadius: BorderRadius.circular(_height / 2),
                 boxShadow: const [
                   BoxShadow(
@@ -4423,7 +4436,7 @@ class RecuperoTurnoPill extends StatelessWidget {
                     Text(
                       'TURNO',
                       style: appTextStyle(
-                        fontSize: _fontSize * 0.85,
+                        fontSize: _fontSize * 0.58,
                         weight: 800,
                         letterSpacing: 0.5,
                         color: foreground,
@@ -4441,7 +4454,6 @@ class RecuperoTurnoPill extends StatelessWidget {
                 ],
               ),
             ),
-          ),
         ),
       ),
     );
