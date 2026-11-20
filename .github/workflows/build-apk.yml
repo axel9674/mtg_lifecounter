@@ -16,7 +16,9 @@ on:
         required: true
         type: string
       file-name:
-        description: Name of the file staged in `dist/`, e.g. `MTG-Life-Counter-1.0.4.apk`.
+        description: >-
+          Name of the file staged in `dist/`. Fixed to `MTG-Life-Counter.apk`, without the
+          version, so the download link is always the same.
         required: true
         type: string
 
@@ -81,8 +83,10 @@ jobs:
             --build-name "$BUILD_NAME" \
             --build-number "$BUILD_NUMBER"
 
-      # `dist/<file>` is the very name `tool/build_apk.ps1` gives to the same commit, so the
-      # local APK and the released one cannot be told apart by name.
+      # `dist/<file>` is fixed (`MTG-Life-Counter.apk`) instead of carrying the version, so
+      # the public link never changes. `tool/build_apk.ps1` keeps the version in the name it
+      # writes locally, where several APKs may sit side by side: that is the one difference
+      # between the two, and it only matters on your own PC.
       - name: Stage the APK in dist/
         env:
           FILE_NAME: ${{ inputs.file-name }}
