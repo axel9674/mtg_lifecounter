@@ -1,96 +1,109 @@
-// I tasti dei turni di recupero: stanno nella zona di ogni giocatore, chi ha il
-// turno tocca il suo, e dopo il quinto turno resta il pareggio da refertare.
+// La pillola dei turni di recupero: sta nella zona di ogni giocatore, e' della
+// stessa famiglia di quella del veleno, e cambia faccia secondo il momento.
 //
-// Il test guarda il tasto, non il timer: che il tempo che scade lo faccia
+// Il test guarda la pillola, non il timer: che il tempo che scade la faccia
 // comparire e' una riga in `_proponiTurniRecupero`, e provarla da qui vorrebbe
 // dire far scorrere un minuto vero.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mtg_lifecounter/main.dart';
 
-Widget _cornice(Widget figlio) {
-  return MaterialApp(home: Scaffold(body: Center(child: figlio)));
-}
+Widget _cornice(Widget figlio) =>
+    MaterialApp(home: Scaffold(body: Center(child: figlio)));
+
+RecuperoTurnoPill _pillola({
+  String lato = 'a',
+  String? attivo,
+  int turno = -1,
+  VoidCallback? onSonoDiTurno,
+  VoidCallback? onFineTurno,
+  VoidCallback? onPareggio,
+  VoidCallback? onNascondi,
+}) => RecuperoTurnoPill(
+  lato: lato,
+  nome: 'Anna',
+  avversario: 'Bruno',
+  attivo: attivo,
+  turno: turno,
+  onSonoDiTurno: onSonoDiTurno ?? () {},
+  onFineTurno: onFineTurno ?? () {},
+  onPareggio: onPareggio ?? () {},
+  onNascondi: onNascondi ?? () {},
+);
 
 void main() {
-  testWidgets('senza turno dichiarato ognuno vede il suo tasto', (tester) async {
+  testWidgets('prima del turno le due pillole invitano, e ognuna dichiara', (
+    tester,
+  ) async {
     var dichiarato = false;
     await tester.pumpWidget(
-      _cornice(
-        RecuperoAzione(
-          lato: 'b',
-          nome: 'Bruno',
-          avversario: 'Anna',
-          attivo: null,
-          turno: -1,
-          onSonoDiTurno: () => dichiarato = true,
-          onFineTurno: () {},
-          onPareggio: () {},
-          onNascondi: () {},
-        ),
-      ),
+      _cornice(_pillola(onSonoDiTurno: () => dichiarato = true)),
     );
 
-    expect(find.text('Tempo scaduto'), findsOneWidget);
-    expect(find.text('Sono di turno'), findsOneWidget);
-
-    await tester.tap(find.text('Sono di turno'));
+    expect(find.text('TURNO'), findsOneWidget);
+    await tester.tap(find.text('TURNO'));
     await tester.pump();
     expect(dichiarato, isTrue);
   });
 
-  testWidgets('chi non ha il turno non ha tasti, e legge chi gioca', (
+  testWidgets('chi ha il turno conta, chi aspetta legge solo il numero', (
     tester,
   ) async {
+    var fini = 0;
+    await tester.pumpWidget(
+      _cornice(_pillola(attivo: 'a', turno: 2, onFineTurno: () => fini++)),
+    );
+    expect(find.text('2'), findsOneWidget);
+    await tester.tap(find.byType(RecuperoTurnoPill));
+    await tester.pump();
+    expect(fini, 1);
+
+    // Lo stesso turno, ma visto dall'altro lato: la pillola non risponde.
+    var finiAvversario = 0;
     await tester.pumpWidget(
       _cornice(
-        RecuperoAzione(
+        _pillola(
           lato: 'b',
-          nome: 'Bruno',
-          avversario: 'Anna',
           attivo: 'a',
           turno: 2,
-          onSonoDiTurno: () {},
-          onFineTurno: () {},
-          onPareggio: () {},
-          onNascondi: () {},
+          onFineTurno: () => finiAvversario++,
+        ),
+      ),
+    );
+    await tester.tap(find.byType(RecuperoTurnoPill));
+    await tester.pump();
+    expect(finiAvversario, 0);
+  });
+
+  testWidgets('con i turni finiti la pillola referta il pareggio', (
+    tester,
+  ) async {
+    var pareggio = false;
+    await tester.pumpWidget(
+      _cornice(
+        _pillola(
+          attivo: 'a',
+          turno: kTurniRecupero,
+          onPareggio: () => pareggio = true,
         ),
       ),
     );
 
-    expect(find.text('Sono di turno'), findsNothing);
-    expect(find.text('Fine turno'), findsNothing);
-    expect(find.text('Turno 2 di 5'), findsOneWidget);
-    expect(find.text('Gioca Anna'), findsOneWidget);
-  });
-
-  testWidgets('chi ha il turno passa la mano, e alla fine referta il pareggio', (
-    tester,
-  ) async {
-    var fini = 0;
-    var pareggio = false;
-
-    Widget tasto({required int turno}) => RecuperoAzione(
-      lato: 'a',
-      nome: 'Anna',
-      avversario: 'Bruno',
-      attivo: 'a',
-      turno: turno,
-      onSonoDiTurno: () {},
-      onFineTurno: () => fini++,
-      onPareggio: () => pareggio = true,
-      onNascondi: () {},
-    );
-
-    await tester.pumpWidget(_cornice(tasto(turno: 1)));
-    await tester.tap(find.text('Fine turno'));
-    await tester.pump();
-    expect(fini, 1);
-
-    await tester.pumpWidget(_cornice(tasto(turno: kTurniRecupero)));
-    expect(find.text('Turni di recupero finiti'), findsOneWidget);
-    await tester.tap(find.text('Referta pareggio'));
+    await tester.tap(find.byType(RecuperoTurnoPill));
     await tester.pump();
     expect(pareggio, isTrue);
+  });
+
+  testWidgets('tenerla premuta la toglie: la partita era gia decisa', (
+    tester,
+  ) async {
+    var nascosta = false;
+    await tester.pumpWidget(
+      _cornice(_pillola(onNascondi: () => nascosta = true)),
+    );
+
+    await tester.longPress(find.byType(RecuperoTurnoPill));
+    await tester.pump();
+    expect(nascosta, isTrue);
   });
 }
