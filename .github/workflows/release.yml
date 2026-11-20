@@ -113,6 +113,16 @@ jobs:
             printf '%s\n' "- **iOS** - \`$IPA_FILE\`, unsigned" >> note.md
           fi
 
+          # The APK file name is fixed, so for a stable release there is also a link that
+          # always serves the current version. A snapshot is a pre-release and `latest`
+          # skips it, so there the link would point somewhere else: not printed at all.
+          if [ "$SNAPSHOT" != "true" ]; then
+            printf '%s\n' \
+              "" \
+              "Always the current version:" \
+              "<https://github.com/$GITHUB_REPOSITORY/releases/latest/download/$APK_FILE>" >> note.md
+          fi
+
           printf '%s\n' \
             "" \
             "### Installing on Android" \
@@ -185,7 +195,14 @@ jobs:
           fi
 
           repo="https://github.com/$GITHUB_REPOSITORY"
-          apk_url="$repo/releases/download/$TAG/$APK_FILE"
+          # A stable release takes the "latest" slot, and the APK name is fixed: the same
+          # link works for every release. A snapshot is a pre-release, which `latest`
+          # skips on purpose, so there the tag is the only honest address.
+          if [ "$SNAPSHOT" = "true" ]; then
+            apk_url="$repo/releases/download/$TAG/$APK_FILE"
+          else
+            apk_url="$repo/releases/latest/download/$APK_FILE"
+          fi
           ipa_url="$repo/releases/download/$TAG/$IPA_FILE"
           release_url="$repo/releases/tag/$TAG"
 

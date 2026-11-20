@@ -26,7 +26,9 @@ on:
         description: "`true` when the tag carries the `-SNAPSHOT` suffix, i.e. it is a build of `develop`."
         value: ${{ jobs.version.outputs.snapshot }}
       apk:
-        description: File name of the APK attached to the release.
+        description: >-
+          File name of the APK attached to the release. Fixed, with no version in it, so the
+          download link survives every release.
         value: ${{ jobs.version.outputs.apk }}
       ipa:
         description: File name of the IPA attached to the release.
@@ -92,12 +94,19 @@ jobs:
 
           # The build number is **not** in the file names on purpose: it stays in the
           # `versionCode` of the APK (and in the log line below), where it belongs.
+          #
+          # The APK name carries no version either: it is the file people download from a
+          # fixed link (`releases/latest/download/MTG-Life-Counter.apk`), and a name that
+          # changes with every release would break that link each time. The version is not
+          # lost: it lives in the manifest of the APK (`--build-name`/`--build-number`) and
+          # in the title of the release. The IPA keeps the label in its name, because it is
+          # sideloaded by hand and the version in the file helps there.
           {
             echo "name=$name"
             echo "number=$number"
             echo "label=$label"
             echo "snapshot=$snapshot"
-            echo "apk=MTG-Life-Counter-$label.apk"
+            echo "apk=MTG-Life-Counter.apk"
             echo "ipa=MTG-Life-Counter-$label.ipa"
           } >> "$GITHUB_OUTPUT"
 

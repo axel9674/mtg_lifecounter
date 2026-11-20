@@ -49,11 +49,12 @@ Versione e numero di build vengono dal `version:` di `pubspec.yaml` (`nome+numer
 dicono cosi' sempre la stessa cosa. Il numero dopo il `+` e' il `versionCode` di Android e **non
 deve mai calare**: se cala, `adb install -r` fallisce con `INSTALL_FAILED_VERSION_DOWNGRADE` e
 `flutter run`, che dopo il fallimento disinstalla la versione vecchia, si porta via vite, colori
-e timer salvati. L'APK esce come
-`build\app\outputs\flutter-apk\MTG-Life-Counter-<versione>.apk`, accanto a
-`app-release.apk` che resta; con `-Snapshot` diventa
-`MTG-Life-Counter-<versione>-SNAPSHOT.apk`, come sui tag di `develop`. Il numero dopo il `+`
-**non** compare nel nome del file: resta nel `versionCode` dell'APK, dove serve ad Android.
+e timer salvati. Lo script locale `tool/build_apk.ps1` lascia l'APK come
+`build\app\outputs\flutter-apk\MTG-Life-Counter-<versione>.apk` (con `-SNAPSHOT` sui tag di
+`develop`), accanto a `app-release.apk` che resta. La **release** invece pubblica sempre
+`MTG-Life-Counter.apk`, senza versione: il link di download e' uno solo e non cambia a ogni
+versione. Nel nome del file **non** compare ne' la versione ne' il numero dopo il `+`: la
+versione la legge Android nel manifest, il numero nel `versionCode`.
 
 ### La chiave di firma
 
@@ -297,10 +298,11 @@ riusabili, uno per blocco di lavoro, con il nome di quello che fanno.
 - **La versione si legge una volta sola** nel job `version` e da li' il job `build` e il job
   `ios` prendono `build-name`, `build-number` e `file-name`: partono **in parallelo** e non
   possono divergere ne' nel nome ne' nel numero.
-- L'APK esce come `MTG-Life-Counter-<versione>.apk` (non `app-release.apk`): ci
-  pensa lo step `Stage the APK in dist/`, che copia con il nome definitivo. Stesso nome che da'
-  `tool/build_apk.ps1` per lo stesso commit (con `-Snapshot` per gli snapshot di `develop`, dove
-  l'etichetta diventa `<versione>-SNAPSHOT`).
+- L'APK esce come `MTG-Life-Counter.apk`, **senza versione** (non `app-release.apk`): ci pensa
+  lo step `Stage the APK in dist/`. Il nome fisso e' quello che rende possibile il link stabile
+  `releases/latest/download/MTG-Life-Counter.apk`, usato anche dal pulsante nell'app dei
+  tornei; la versione resta nel manifest dell'APK e nel titolo della release. Lo script locale
+  `tool/build_apk.ps1` invece tiene la versione nel nome, perche' sul PC gli APK si affiancano.
 - L'IPA esce come `MTG-Life-Counter-<versione>.ipa`: il file lo costruisce con
   `flutter build ios --release --no-codesign` e poi impacchetta `build/ios/iphoneos/Runner.app`
   in `Payload/Runner.app` con `ditto`. Non si usa `flutter build ipa` perche' con `--no-codesign`
@@ -343,7 +345,9 @@ riusabili, uno per blocco di lavoro, con il nome di quello che fanno.
   requisiti di sistema). Tutto quello che riguarda l'IPA compare **solo se l'IPA c'e'**
   (`IOS_RESULT`, cioe' `needs.ios.result`): niente allegati promessi e non consegnati.
 - A release pubblicata lo step `Notify on Telegram` manda un messaggio con i link diretti
-  all'APK (e all'IPA, quando c'e': `releases/download/<tag>/<file>`) e quello alle note. Richiede
+  all'APK (per una release stabile `releases/latest/download/MTG-Life-Counter.apk`, per una
+  snapshot `releases/download/<tag>/<file>`: `latest` salta le pre-release), all'IPA quando c'e'
+  e quello alle note. Richiede
   i segreti `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`: se mancano la notifica viene saltata con
   un `::warning::` e la release resta comunque valida.
 - La notifica ha `continue-on-error: true`: Telegram e' un di piu', e un rifiuto (token scaduto,
