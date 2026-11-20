@@ -1528,6 +1528,7 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
         // libero per la scritta e' dall'altra parte.
         opponentLifeAbove: true,
         azione: _azioneRecupero('a'),
+        azionePrima: true,
       ),
       second: PlayerZone(
         life: player2Life,
@@ -2376,12 +2377,18 @@ class PlayerZone extends StatelessWidget {
   final ValueChanged<int> onTogglePalette;
   final ValueChanged<Color> onColorSelected;
 
-  /// Tasto facoltativo in fondo alla zona: oggi e' quello dei turni di
-  /// recupero, che deve stare dalla parte del giocatore che lo tocca.
+  /// Tasto facoltativo della zona: oggi e' quello dei turni di recupero, che
+  /// deve stare dalla parte del giocatore che lo tocca.
   final Widget? azione;
+
+  /// True mette il tasto **sopra** il contatore invece che sotto: la prima zona
+  /// ce l'ha in alto, verso il bordo esterno, perche' sotto c'e' il centro
+  /// dello schermo dove sta il menu, e li' i due si coprirebbero.
+  final bool azionePrima;
 
   const PlayerZone({
     this.azione,
+    this.azionePrima = false,
     required this.life,
     required this.onIncrease,
     required this.onDecrease,
@@ -2459,6 +2466,11 @@ class PlayerZone extends StatelessWidget {
                         // bordo scoperto della card.
                         if (paletteVisible && cardGoesDown)
                           _ZoneCardHandle(cardColor: backgroundColor),
+                        if (azione != null && azionePrima)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: azione,
+                          ),
                         Expanded(
                           child: LifeCounterPanelTouch(
                             life: life,
@@ -2470,7 +2482,7 @@ class PlayerZone extends StatelessWidget {
                             opponentLifeAbove: opponentLifeAbove,
                           ),
                         ),
-                        if (azione != null)
+                        if (azione != null && !azionePrima)
                           Padding(
                             padding: const EdgeInsets.only(bottom: 12),
                             child: azione,
