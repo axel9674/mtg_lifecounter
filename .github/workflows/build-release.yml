@@ -28,7 +28,9 @@ name: Build APK e release
 
 on:
   push:
-    branches: [main]
+    # Il ramo di casa e' `master`: con `main` questo trigger non scattava mai
+    # (il repo non ha quel ramo), quindi i push normali non costruivano nulla.
+    branches: [master]
     tags: ['v*']
   workflow_dispatch:
 
