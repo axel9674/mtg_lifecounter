@@ -1,78 +1,94 @@
-// Il conteggio dei turni di recupero: si dichiara chi ha il turno, si avanza a
-// ogni fine turno, e dopo il quinto si arriva al pareggio.
+// I tasti dei turni di recupero: stanno nella zona di ogni giocatore, chi ha il
+// turno tocca il suo, e dopo il quinto turno resta il pareggio da refertare.
 //
-// Il test guarda il pannello, non il timer: che il tempo che scade apra questo
-// pannello e' una riga in `_tickTimer`, e provarla da qui vorrebbe dire far
-// scorrere un minuto vero.
+// Il test guarda il tasto, non il timer: che il tempo che scade lo faccia
+// comparire e' una riga in `_proponiTurniRecupero`, e provarla da qui vorrebbe
+// dire far scorrere un minuto vero.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mtg_lifecounter/main.dart';
 
 Widget _cornice(Widget figlio) {
-  return MaterialApp(home: Scaffold(body: Builder(builder: (_) => figlio)));
+  return MaterialApp(home: Scaffold(body: Center(child: figlio)));
 }
 
 void main() {
-  testWidgets('chi ha il turno lo dichiara e si parte dal turno 0', (
-    tester,
-  ) async {
-    String? attivo;
-    var turno = -1;
+  testWidgets('senza turno dichiarato ognuno vede il suo tasto', (tester) async {
+    var dichiarato = false;
     await tester.pumpWidget(
       _cornice(
-        TurniRecuperoDialog(
-          nomeA: 'Anna',
-          nomeB: 'Bruno',
+        RecuperoAzione(
+          lato: 'b',
+          nome: 'Bruno',
+          avversario: 'Anna',
           attivo: null,
           turno: -1,
-          onScegliAttivo: (lato) => attivo = lato,
-          onFineTurno: () => turno++,
+          onSonoDiTurno: () => dichiarato = true,
+          onFineTurno: () {},
           onPareggio: () {},
+          onNascondi: () {},
         ),
       ),
     );
 
     expect(find.text('Tempo scaduto'), findsOneWidget);
-    expect(find.text('Anna'), findsOneWidget);
-    expect(find.text('Bruno'), findsOneWidget);
+    expect(find.text('Sono di turno'), findsOneWidget);
 
-    await tester.tap(find.text('Bruno'));
+    await tester.tap(find.text('Sono di turno'));
     await tester.pump();
-
-    expect(attivo, 'b');
-    expect(find.text('Turno 0'), findsOneWidget);
-    expect(find.textContaining('Ha il turno Bruno'), findsOneWidget);
+    expect(dichiarato, isTrue);
   });
 
-  testWidgets('ogni fine turno avanza, e al sesto passo si referta il pareggio', (
+  testWidgets('chi non ha il turno non ha tasti, e legge chi gioca', (
     tester,
   ) async {
-    var fini = 0;
-    var pareggio = false;
     await tester.pumpWidget(
       _cornice(
-        TurniRecuperoDialog(
-          nomeA: 'Anna',
-          nomeB: 'Bruno',
+        RecuperoAzione(
+          lato: 'b',
+          nome: 'Bruno',
+          avversario: 'Anna',
           attivo: 'a',
-          turno: 0,
-          onScegliAttivo: (_) {},
-          onFineTurno: () => fini++,
-          onPareggio: () => pareggio = true,
+          turno: 2,
+          onSonoDiTurno: () {},
+          onFineTurno: () {},
+          onPareggio: () {},
+          onNascondi: () {},
         ),
       ),
     );
 
-    for (var i = 0; i < kTurniRecupero; i++) {
-      expect(find.text('Fine turno'), findsOneWidget);
-      await tester.tap(find.text('Fine turno'));
-      await tester.pump();
-    }
+    expect(find.text('Sono di turno'), findsNothing);
+    expect(find.text('Fine turno'), findsNothing);
+    expect(find.text('Turno 2 di 5'), findsOneWidget);
+    expect(find.text('Gioca Anna'), findsOneWidget);
+  });
 
-    expect(fini, kTurniRecupero);
+  testWidgets('chi ha il turno passa la mano, e alla fine referta il pareggio', (
+    tester,
+  ) async {
+    var fini = 0;
+    var pareggio = false;
+
+    Widget tasto({required int turno}) => RecuperoAzione(
+      lato: 'a',
+      nome: 'Anna',
+      avversario: 'Bruno',
+      attivo: 'a',
+      turno: turno,
+      onSonoDiTurno: () {},
+      onFineTurno: () => fini++,
+      onPareggio: () => pareggio = true,
+      onNascondi: () {},
+    );
+
+    await tester.pumpWidget(_cornice(tasto(turno: 1)));
+    await tester.tap(find.text('Fine turno'));
+    await tester.pump();
+    expect(fini, 1);
+
+    await tester.pumpWidget(_cornice(tasto(turno: kTurniRecupero)));
     expect(find.text('Turni di recupero finiti'), findsOneWidget);
-    expect(find.text('Referta pareggio'), findsOneWidget);
-
     await tester.tap(find.text('Referta pareggio'));
     await tester.pump();
     expect(pareggio, isTrue);
