@@ -45,6 +45,9 @@ dependencies:
   # nel menu. Sono gli stessi valori di pubspec.yaml (e delle release), quindi
   # non c'e' un secondo posto da aggiornare a mano.
   package_info_plus: ^10.2.1
+  # Serve solo al collegamento con il torneo (vedi lib/tavolo.dart): due
+  # chiamate, nessuna dipendenza da un server quando l'app e' autonoma.
+  http: ^1.2.2
   shared_preferences: ^2.5.5
   wakelock_plus: ^1.8.0
 

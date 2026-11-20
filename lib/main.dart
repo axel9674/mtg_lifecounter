@@ -7,6 +7,8 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import 'tavolo.dart';
+
 /// Font arrotondato e molto leggibile usato in tutta l'app.
 /// E' un variable font: il peso si sceglie con FontVariation('wght', n).
 const String kAppFontFamily = 'Nunito';
@@ -384,6 +386,12 @@ const String _kOpponentLifeVisibleKey = 'opponentLifeVisible';
 /// accendono dalla voce del menu.
 const String _kPoisonVisibleKey = 'poisonVisible';
 
+/// Codice del tavolo a cui l'app e' agganciata (sei caratteri). Vuoto o assente
+/// = nessun collegamento, e l'app funziona come sempre. Il collegamento e' un
+/// di piu': si ricorda fra un avvio e l'altro, e cade da solo quando la partita
+/// viene refertata o il torneo si chiude.
+const String _kTavoloKey = 'tavoloCodice';
+
 /// Impostazioni del timer di partita: se e' acceso, quanto dura e quanto tempo
 /// resta. Il timer fermo resta fermo anche riaprendo l'app: a farlo ripartire
 /// e' un tocco sul suo box.
@@ -452,6 +460,16 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
   /// finche' non e' stata letta, e dove non c'e' (sul web in sviluppo il file
   /// della versione non viene generato) la scritta semplicemente non compare.
   String _appVersion = '';
+
+  /// Il tavolo del torneo a cui si e' agganciati, se c'e'. `null` = app
+  /// autonoma, che e' il caso normale.
+  TavoloCollegato? _tavolo;
+
+  /// True mentre una chiamata al torneo e' in corso: la voce del menu mostra
+  /// che sta lavorando invece di lasciar premere due volte.
+  bool _tavoloOccupato = false;
+
+  static const TavoloApi _apiTavolo = TavoloApi();
 
   static const int _diceSides = 20;
 
@@ -636,6 +654,13 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     });
     if (running) {
       _startTicker();
+    }
+
+    // Il collegamento al tavolo si rilegge in sottofondo: se il torneo non
+    // risponde non succede niente, l'app conta la vita lo stesso.
+    final codiceTavolo = prefs.getString(_kTavoloKey);
+    if (codiceTavolo != null && codiceTavolo.isNotEmpty) {
+      unawaited(_riprendiTavolo(codiceTavolo));
     }
 
     if (_touched) return;
@@ -1072,6 +1097,142 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
     closeMenu();
   }
 
+  /// Riprende il tavolo salvato all'avvio, senza disturbare: se il torneo non
+  /// risponde il collegamento resta scritto e si riprova al prossimo avvio.
+  Future<void> _riprendiTavolo(String codice) async {
+    try {
+      final tavolo = await _apiTavolo.leggi(codice);
+      if (!mounted) return;
+      setState(() => _tavolo = tavolo);
+    } on TavoloErrore {
+      if (!mounted) return;
+      setState(
+        () => _tavolo = TavoloCollegato(
+          codice: codice,
+          torneo: 'Torneo',
+          turno: 1,
+          giocatoreA: 'tavolo non raggiungibile',
+          canReport: false,
+          whyNot: 'Il torneo non risponde: tocca per riprovare.',
+        ),
+      );
+    }
+  }
+
+  /// La voce del menu "Tavolo": collega, mostra lo stato, referta o scollega.
+  ///
+  /// E' una voce sola che cambia faccia: senza collegamento chiede il codice,
+  /// con il collegamento mostra i due nomi. Non compare niente all'avvio se non
+  /// c'e' un tavolo, perche' l'app deve restare quella di sempre.
+  Future<void> apriTavolo() async {
+    final tavolo = _tavolo;
+    if (tavolo == null) {
+      final codice = await showDialog<String>(
+        context: context,
+        builder: (_) => const _CollegaTavoloDialog(),
+      );
+      if (codice == null || !mounted) return;
+      await _collegaAlTavolo(codice);
+      return;
+    }
+
+    final azione = await showDialog<String>(
+      context: context,
+      builder: (_) => _TavoloDialog(tavolo: tavolo),
+    );
+    if (azione == null || !mounted) return;
+    switch (azione) {
+      case 'referta':
+        await _refertaTavolo(tavolo);
+      case 'aggiorna':
+        await _aggiornaTavolo(avvisa: true);
+      case 'scollega':
+        await _scollegaTavolo();
+    }
+  }
+
+  Future<void> _collegaAlTavolo(String codice) async {
+    setState(() => _tavoloOccupato = true);
+    try {
+      final tavolo = await _apiTavolo.leggi(codice);
+      await _salvaTavolo(tavolo.codice);
+      if (!mounted) return;
+      setState(() => _tavolo = tavolo);
+      _avviso('Collegato: ${tavolo.etichetta}');
+    } on TavoloErrore catch (errore) {
+      _avviso(errore.messaggio);
+    } finally {
+      if (mounted) setState(() => _tavoloOccupato = false);
+    }
+  }
+
+  Future<void> _aggiornaTavolo({bool avvisa = false}) async {
+    final tavolo = _tavolo;
+    if (tavolo == null) return;
+    try {
+      final fresco = await _apiTavolo.leggi(tavolo.codice);
+      if (!mounted) return;
+      setState(() => _tavolo = fresco);
+      if (avvisa) _avviso(fresco.etichetta);
+    } on TavoloErrore catch (errore) {
+      // La partita continua anche se il torneo non risponde: si avvisa e basta.
+      if (avvisa) _avviso(errore.messaggio);
+    }
+  }
+
+  Future<void> _scollegaTavolo() async {
+    await _salvaTavolo(null);
+    if (!mounted) return;
+    setState(() => _tavolo = null);
+    _avviso('Scollegato dal tavolo: la partita resta.');
+  }
+
+  Future<void> _salvaTavolo(String? codice) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (codice == null) {
+        await prefs.remove(_kTavoloKey);
+      } else {
+        await prefs.setString(_kTavoloKey, codice);
+      }
+    } catch (_) {
+      // Senza memoria il collegamento vale per questa sessione: non e' un guaio.
+    }
+  }
+
+  Future<void> _refertaTavolo(TavoloCollegato tavolo) async {
+    final esito = await showDialog<_EsitoReferto>(
+      context: context,
+      builder: (_) => _RefertaTavoloDialog(tavolo: tavolo),
+    );
+    if (esito == null || !mounted) return;
+    setState(() => _tavoloOccupato = true);
+    try {
+      final aggiornato = await _apiTavolo.referta(
+        tavolo.codice,
+        risultato: esito.risultato,
+        gamesVintiA: esito.gamesA,
+        gamesVintiB: esito.gamesB,
+      );
+      if (!mounted) return;
+      setState(() => _tavolo = aggiornato);
+      _avviso(
+        'Refertato: ${aggiornato.risultatoLeggibile ?? 'risultato scritto'}',
+      );
+    } on TavoloErrore catch (errore) {
+      _avviso(errore.messaggio);
+    } finally {
+      if (mounted) setState(() => _tavoloOccupato = false);
+    }
+  }
+
+  void _avviso(String testo) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(testo), behavior: SnackBarBehavior.floating),
+    );
+  }
+
   List<RadialMenuItem> _buildMenuItems() {
     return [
       RadialMenuItem(
@@ -1126,6 +1287,18 @@ class _LifeCounterHomeState extends State<LifeCounterHome>
             ? 'Nascondi i segnalini veleno (tocco: +1, tieni premuto: -1)'
             : 'Mostra i segnalini veleno (tocco: +1, tieni premuto: -1)',
         onTap: () => runMenuAction(togglePoison),
+      ),
+      // Il tavolo del torneo: voce sola che cambia faccia. Spenta quando non
+      // c'e' collegamento, con i due nomi quando c'e'. Sta in fondo perche'
+      // all'app serve prima contare la vita, poi raccontarla.
+      RadialMenuItem(
+        icon: _tavolo == null ? Icons.link : Icons.table_restaurant,
+        tooltip: _tavoloOccupato
+            ? 'Tavolo: contatto il torneo...'
+            : _tavolo == null
+            ? 'Collega al tavolo del torneo (codice di 6 caratteri)'
+            : 'Tavolo ${_tavolo!.turno}: ${_tavolo!.etichetta}',
+        onTap: () => runMenuAction(apriTavolo),
       ),
     ];
   }
@@ -3534,6 +3707,362 @@ class _LifePresetPicker extends StatelessWidget {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// L'esito scelto nel referto: chi vince e quanti game.
+class _EsitoReferto {
+  const _EsitoReferto({
+    required this.risultato,
+    required this.gamesA,
+    required this.gamesB,
+  });
+
+  /// `player_a`, `player_b` o `draw`: gli stessi valori dell'API.
+  final String risultato;
+  final int gamesA;
+  final int gamesB;
+}
+
+/// Il codice del tavolo si incolla qui.
+///
+/// Il campo e' in mono e a sei caratteri, come viene mostrato dall'app dei
+/// tornei: chi lo legge su un telefono e lo digita su un altro non deve
+/// indovinare se c'e' un trattino di mezzo (non c'e').
+class _CollegaTavoloDialog extends StatefulWidget {
+  const _CollegaTavoloDialog();
+
+  @override
+  State<_CollegaTavoloDialog> createState() => _CollegaTavoloDialogState();
+}
+
+class _CollegaTavoloDialogState extends State<_CollegaTavoloDialog> {
+  final TextEditingController _controller = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(() => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  String get _codice => TavoloApi.pulisci(_controller.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1B1B1B),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      title: Text(
+        'Collega al tavolo',
+        style: appTextStyle(fontSize: 22, weight: 800, letterSpacing: 1),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Scrivi il codice che vedi nella riga del tuo tavolo, '
+            'nell\'app dei tornei.',
+            style: appTextStyle(fontSize: 14, color: Colors.white70),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            textCapitalization: TextCapitalization.characters,
+            inputFormatters: [
+              FilteringTextInputFormatter.allow(RegExp('[A-Za-z0-9]')),
+              LengthLimitingTextInputFormatter(6),
+            ],
+            style: appTextStyle(fontSize: 24, weight: 700, letterSpacing: 6),
+            textAlign: TextAlign.center,
+            decoration: InputDecoration(
+              hintText: 'K7P2QX',
+              hintStyle: appTextStyle(
+                fontSize: 24,
+                letterSpacing: 6,
+                color: Colors.white24,
+              ),
+              filled: true,
+              fillColor: const Color(0xFF111111),
+              counterText: '',
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Il codice cambia a ogni turno: se non funziona, guarda la riga '
+            'del tavolo di adesso.',
+            style: appTextStyle(fontSize: 12, color: Colors.white38),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Annulla'),
+        ),
+        FilledButton(
+          onPressed: _codice.length == 6
+              ? () => Navigator.of(context).pop(_codice)
+              : null,
+          child: const Text('Collega'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Lo stato del tavolo, con le due cose che si fanno: refertare o scollegare.
+class _TavoloDialog extends StatelessWidget {
+  const _TavoloDialog({required this.tavolo});
+
+  final TavoloCollegato tavolo;
+
+  @override
+  Widget build(BuildContext context) {
+    final risultato = tavolo.risultatoLeggibile;
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1B1B1B),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      title: Text(
+        'Tavolo ${tavolo.tavolo ?? '—'}',
+        style: appTextStyle(fontSize: 22, weight: 800, letterSpacing: 1),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${tavolo.torneo} · turno ${tavolo.turno}',
+            style: appTextStyle(fontSize: 13, color: Colors.white54),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            tavolo.etichetta,
+            style: appTextStyle(fontSize: 18, weight: 700),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            risultato == null ? 'Risultato non ancora scritto' : 'Risultato: $risultato',
+            style: appTextStyle(
+              fontSize: 14,
+              color: risultato == null ? Colors.white54 : Colors.greenAccent,
+            ),
+          ),
+          if (tavolo.whyNot != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              tavolo.whyNot!,
+              style: appTextStyle(fontSize: 12.5, color: Colors.orangeAccent),
+            ),
+          ],
+          const SizedBox(height: 10),
+          Text(
+            'Codice ${tavolo.codice}',
+            style: appTextStyle(
+              fontSize: 12,
+              letterSpacing: 2,
+              color: Colors.white38,
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop('scollega'),
+          child: const Text('Scollega'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop('aggiorna'),
+          child: const Text('Aggiorna'),
+        ),
+        if (tavolo.canReport)
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop('referta'),
+            child: const Text('Referta'),
+          ),
+      ],
+    );
+  }
+}
+
+/// Il referto: chi ha vinto e con quanti game.
+///
+/// Le combinazioni sono quelle vere di un match di Magic — 2-0, 2-1, e 1-1 per
+/// il pareggio — invece di due campi liberi: un 1-2 dichiarato vittoria
+/// falserebbe la percentuale dei game, e il server lo rifiuterebbe comunque.
+class _RefertaTavoloDialog extends StatefulWidget {
+  const _RefertaTavoloDialog({required this.tavolo});
+
+  final TavoloCollegato tavolo;
+
+  @override
+  State<_RefertaTavoloDialog> createState() => _RefertaTavoloDialogState();
+}
+
+class _RefertaTavoloDialogState extends State<_RefertaTavoloDialog> {
+  /// `player_a`, `player_b` o `draw`.
+  String? _scelta;
+
+  /// Quanti game ha lasciato all'avversario chi vince: 0 = 2-0, 1 = 2-1.
+  int _gamePersi = 0;
+
+  String get _nomeA => widget.tavolo.giocatoreA;
+  String get _nomeB => widget.tavolo.giocatoreB ?? 'Avversario';
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1B1B1B),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      title: Text(
+        'Chi ha vinto?',
+        style: appTextStyle(fontSize: 22, weight: 800, letterSpacing: 1),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _SceltaReferto(
+            etichetta: _nomeA,
+            scelta: _scelta == 'player_a',
+            onTap: () => setState(() => _scelta = 'player_a'),
+          ),
+          _SceltaReferto(
+            etichetta: 'Pareggio',
+            scelta: _scelta == 'draw',
+            onTap: () => setState(() => _scelta = 'draw'),
+          ),
+          _SceltaReferto(
+            etichetta: _nomeB,
+            scelta: _scelta == 'player_b',
+            onTap: () => setState(() => _scelta = 'player_b'),
+          ),
+          if (_scelta != null && _scelta != 'draw') ...[
+            const SizedBox(height: 14),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _GameScelta(
+                  testo: '2-0',
+                  scelta: _gamePersi == 0,
+                  onTap: () => setState(() => _gamePersi = 0),
+                ),
+                const SizedBox(width: 10),
+                _GameScelta(
+                  testo: '2-1',
+                  scelta: _gamePersi == 1,
+                  onTap: () => setState(() => _gamePersi = 1),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Annulla'),
+        ),
+        FilledButton(
+          onPressed: _scelta == null
+              ? null
+              : () => Navigator.of(context).pop(
+                  _scelta == 'draw'
+                      ? const _EsitoReferto(
+                          risultato: 'draw',
+                          gamesA: 1,
+                          gamesB: 1,
+                        )
+                      : _EsitoReferto(
+                          risultato: _scelta!,
+                          gamesA: _scelta == 'player_a' ? 2 : _gamePersi,
+                          gamesB: _scelta == 'player_b' ? 2 : _gamePersi,
+                        ),
+                ),
+          child: const Text('Manda'),
+        ),
+      ],
+    );
+  }
+}
+
+class _SceltaReferto extends StatelessWidget {
+  const _SceltaReferto({
+    required this.etichetta,
+    required this.scelta,
+    required this.onTap,
+  });
+
+  final String etichetta;
+  final bool scelta;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+          decoration: BoxDecoration(
+            color: scelta ? Colors.white : const Color(0xFF232323),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Text(
+            etichetta,
+            style: appTextStyle(
+              fontSize: 16,
+              weight: 700,
+              color: scelta ? Colors.black : Colors.white,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _GameScelta extends StatelessWidget {
+  const _GameScelta({
+    required this.testo,
+    required this.scelta,
+    required this.onTap,
+  });
+
+  final String testo;
+  final bool scelta;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 18),
+        decoration: BoxDecoration(
+          color: scelta ? Colors.white : const Color(0xFF232323),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(
+          testo,
+          style: appTextStyle(
+            fontSize: 16,
+            weight: 700,
+            color: scelta ? Colors.black : Colors.white,
+          ),
+        ),
       ),
     );
   }
